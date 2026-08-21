@@ -1,0 +1,9 @@
+Flask==3.1.3
+wsgiserver==1.3
+psycopg2-binary==2.9.12
+requests==2.33.1
+pyserial==3.5
+cryptography==46.0.6
+psutil==7.2.2
+lxml==6.0.2
+pykml==0.2.0

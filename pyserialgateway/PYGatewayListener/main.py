@@ -1,0 +1,575 @@
+'''
+Top-level orchestration: creates the shared queues, the long-lived Main*
+threads, and runs the serial-read / packet-dispatch loop.
+
+This is main() exactly as it was in the original single-file script, just
+now pulling its collaborator classes and config values in from the other
+modules in this package instead of finding them as bare names in the same
+file.
+'''
+import time
+import sys, os, subprocess
+import serial
+import datetime
+import multiprocessing
+import logging, logging.handlers as handlers
+
+from .config import (
+    first_GW_data, second_GW_data,
+    GPS_style1, GPS_style2, GPS_style3,
+    test_align_flag, between_flag, MQTT_client_ID,
+    problemlogpath, logfilepath, maplogpath,
+    cycletime, pollinggap,
+    active_time, GPS_active_time, inactive_time, LM_active_time, node_off_time,
+    aggressive_poll_duration_mins, location_mod, full_URLstring,
+)
+from .utils import StatObjectExceptionAPI
+from .database_aligner import DatabaseAligner
+from .kml_manager import KMLMapManager
+from .serial_manager import SerialObjectManager
+from .rest_api import RESTAPI, RESTMainControllerThread
+from .http_thread import MainHTTPURLThread
+from .record_thread import MainRecordThread
+from .reset_thread import MainResetThread
+from .polling_thread import MainPollingThread
+from .main_listener_thread import MainListenerThread
+
+def main(*args):
+    '''
+    [Creating several multiprocessing Queues, used by Main type threads to obtain data from processes]
+    # polling_queue :- MainPolling, refreshes H1 packets obtained from nodes in DB list
+    # residual_polling_queue :- MainPolling, accommodates low-priority H1 polling for already-known status nodes to decrease H2 packet floods                    
+    # reset_queue :- MainReset, resets nodes according to faults detected by MainListener                
+    # record_queue :- MainRecord, logs descriptive faults in error.log.*                                
+    # msg_queue :- MainHTTPURL, forwards valid packets from MainListener up to REST service                
+    # (unused) mqtt_msg_queue :- MainMsgServer, forwards valid packets from MainListener to MQTT broker    
+    # GPS_confirmed_queue :- MainPolling & MainListener, daily mapping & memory keeping for G0 packets    
+    # reset_G0_confirmed_queue :- MainReset & MainListener, auto node insert in DB for new installation 
+    # TT_query_queue :- MainReset & MainListener, auto timetable rectify for nodes w/ odd lamp status    
+    # REST_controller_queue :- MainReset, serial asynchronous command entry from REST server            
+    '''
+    polling_queue = multiprocessing.JoinableQueue()
+    residual_polling_queue = multiprocessing.JoinableQueue()
+    reset_queue = multiprocessing.JoinableQueue()
+    record_queue = multiprocessing.JoinableQueue()
+    msg_queue = multiprocessing.JoinableQueue()
+    GPS_confirmed_queue = multiprocessing.JoinableQueue()
+    reset_G0_confirmed_queue = multiprocessing.JoinableQueue()
+    TT_query_queue = multiprocessing.JoinableQueue()
+    REST_controller_queue = multiprocessing.JoinableQueue()
+    
+    '''
+    [Start up variables to support functions used by Main function & dynamic objects]    
+    # my_logger_* :- Different static file loggers for different occasions (usage details as below)        
+    # formatter_* :- Different logging formats                                                            
+    # options_string :- Startup argument string creation for declaration of extra functions    
+    # all_other_main_threads :- Initial list of other Main-type threads that will be used for WATCHDOG monitoring
+    # datenow, datein :- Startup reference dates for script startup and other variables                             
+    # *_datetimenow :- Formation of time stamps according to times declared in config.properties                    
+    # between_flag :- time profiles determined by active_time and inactive_time of config.properties                
+    # *_fh :- File handlers to park formatter_* alongside repository properties                                        
+    # my_logger_* :- (Usage details)                                                                                
+    #    my_logger[debug] - Displays data in console only                                                            
+    #    my_logger[info&+] - Displays data in console, records system time & data in 2-line format in gateway.log.*    
+    #    my_logger_simple[debug&+] - Records system time & data in 1-line format in gateway.log.*                    
+    #    my_logger_problem[debug&+] - Records system time & data in 1-line format in error.log.*            
+    # kmlpathname :- Filename for .kml type map created using reference date                    
+    '''
+    my_logger = logging.getLogger('PacketListener')
+    my_logger.setLevel(logging.DEBUG)
+    my_logger_simple = logging.getLogger('PollingListener')
+    my_logger_simple.setLevel(logging.DEBUG)
+    my_logger_problem = logging.getLogger('MainReset')
+    my_logger_problem.setLevel(logging.DEBUG)
+    formatter_simplelog = logging.Formatter('%(asctime)s:%(levelname)s %(threadName)s:%(lineno)d - %(message)s\n', datefmt='%Y-%m-%d,%H:%M:%S')
+    formatter_log = logging.Formatter('%(asctime)s  %(levelname)s  %(threadName)s:%(lineno)d -\n%(message)s\n')
+    formatter_stdo = logging.Formatter('%(asctime)s  %(threadName)s:%(lineno)d - %(message)s\n', datefmt='%Y-%m-%d,%H:%M:%S')
+    options_string = ''.join(str(elements) for elements in args)
+    all_other_main_threads = []
+    datenow = time.strftime('%d-%m-%Y', time.localtime())
+    GPSactive_datetimenow = datetime.datetime.strptime(datenow + ' ' + GPS_active_time + ':00', '%d-%m-%Y %H:%M:%S')
+    LMactive_datetimenow = datetime.datetime.strptime(datenow + ' ' + LM_active_time + ':00', '%d-%m-%Y %H:%M:%S')
+    nodeoff_datetimenow = datetime.datetime.strptime(datenow + ' ' + node_off_time + ':00', '%d-%m-%Y %H:%M:%S')
+    active_datetimenow = datetime.datetime.strptime(datenow + ' ' + active_time + ':00', '%d-%m-%Y %H:%M:%S')
+    inactive_datetimenow = datetime.datetime.strptime(datenow + ' ' + inactive_time + ':00', '%d-%m-%Y %H:%M:%S')
+    aggressivepoll_datetimenow = active_datetimenow + datetime.timedelta(minutes=aggressive_poll_duration_mins)
+    if between_flag == 2:
+        pass
+    elif between_flag == 1:
+        LMactive_datetimenow += datetime.timedelta(days=-1)
+    elif between_flag == 0:
+        active_datetimenow += datetime.timedelta(days=-1)
+        aggressivepoll_datetimenow += datetime.timedelta(days=-1)
+        LMactive_datetimenow += datetime.timedelta(days=-2)
+        nodeoff_datetimenow += datetime.timedelta(days=-1)
+    datein = list(time.localtime()[0:3])
+    simple_fh = handlers.RotatingFileHandler(logfilepath+'/gateway.log', maxBytes=5000000, backupCount=100)
+    simple_fh.setLevel(logging.DEBUG)
+    simple_fh.setFormatter(formatter_simplelog)
+    my_logger_simple.addHandler(simple_fh)
+    fh = handlers.RotatingFileHandler(logfilepath+'/gateway.log', maxBytes=5000000, backupCount=100)
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(formatter_log)
+    my_logger.addHandler(fh)
+    stdoh = logging.StreamHandler(sys.stdout)
+    stdoh.setLevel(logging.DEBUG)
+    stdoh.setFormatter(formatter_stdo)
+    my_logger.addHandler(stdoh)
+    problem_fh = handlers.RotatingFileHandler(problemlogpath+'/error.log', maxBytes=500000, backupCount=25)
+    problem_fh.setLevel(logging.INFO)
+    problem_fh.setFormatter(formatter_simplelog)
+    my_logger_problem.addHandler(problem_fh)
+    kmllogfilename = '_'.join(str(it) for it in datein) + '_' + MQTT_client_ID + '_GPSscan.kml'
+    kmlpathname = maplogpath+'/'+kmllogfilename
+    
+    
+    '''
+    [Creating dynamic/inheritable objects to support resources used by Threads]
+    # DatabaseAligner :- Database-type actions, used to select/configure data in DB                        
+    # SerialObjectManager :- USB/COM port actions, supports dynamic runtime usage                        
+    # KMLMapManager :- Mapping actions, for .xml file type logging specific to Google Earth                
+    # RESTAPI :- Properties for external Web REST Server application when receiving GET requests
+    '''
+    DBAligner = StatObjectExceptionAPI(DatabaseAligner,my_logger,my_logger_problem)
+    KMLMapper = StatObjectExceptionAPI(KMLMapManager,my_logger,my_logger_problem)
+    SerialProcessObject = SerialObjectManager()
+    RESTAPIObject = RESTAPI()
+
+
+    '''
+    [Manually INIT dynamic/inheritable objects with start up variables]
+    # KMLDocumentElement :- File pointer to write map data that points back to KMLMapper
+    # port_* :- Port resources pointer that points back to port determined by SerialProcessObject
+    # node_database_list :- Main node list cross-checked by static database determined by DBAligner
+    # options_status_dict (all flags are initially disabled)
+    :- 'DBUP', enable function to auto-sync DB with Excel daily, or on every port switch
+    :- 'GPSUP', enable GPS mapping feature
+    :- 'DEMOUP', disable all node recovery actions during runtime
+    :- 'TESTUP', disable data sending to main server, only to test server(s) listed in configuration
+    :- 'NOSELMOS', disable uploading data to remote servers
+    :- 'NOPOLL', disable cycle-based active polling actions for preset node list
+    :- 'NOAUTH', disable basic authentication level on packet sent
+    '''
+    try:
+        if not os.path.isfile(kmlpathname):
+            raise
+        KMLDocumentElement, GPS_confirmed_list = KMLMapper.inherit_old_document_info(kmlpathname, [GPS_style1, GPS_style2, GPS_style3])
+        if KMLDocumentElement is None:
+            raise
+    except:
+        KMLDocumentElement = KMLMapper.ini_run(kmlpathname, [GPS_style1, GPS_style2, GPS_style3])
+    port_status, port_name, port_data, port_index = SerialProcessObject.ini_run(my_logger, my_logger_simple, my_logger_problem, 1, [first_GW_data, second_GW_data], None)
+    RESTAPIObject.ini_run(my_logger, my_logger_simple, REST_controller_queue, msg_queue)
+    options_status_dict = {
+        'DBUP': False,
+        'GPSUP': False,
+        'DEMOUP': False,
+        'TESTUP': False,
+        'NOSELMOS': False,
+        'NOPOLL': False,
+        'NOAUTH': False
+    }
+    try:
+        for flag in options_status_dict:
+            if options_string.find(str(flag)) != -1:
+                options_status_dict[flag] = True
+    except:
+        pass
+    
+    node_database_list = DBAligner.run(my_logger, my_logger_simple, my_logger_problem, port_data, [first_GW_data, second_GW_data], options_status_dict['DBUP'])
+    if node_database_list == []:
+        error_string = 'DBUP - PostgreSQL database has no target nodes, deactivating code.'
+        my_logger.debug(error_string)
+        my_logger_problem.error(error_string)
+    '''
+    [Starting up all Main-type threads, each with distinctive functions]
+    # If no USB ports are found during startup, no threads will succeed and the script will exit.
+    # If startup argument has 'NOPOLL', only the MainPollingThread is disabled. All other functions will be alive, and SerialPort occupied.
+    # If startup argument has 'GPSUP', MainPollingThread will double poll for GPS data at a specific time, which will then be used by the KMLMapper object.
+    # If startup argument has 'NOSELMOS', any updated packet data will not be uploaded to SELMOS. Only to be used in gateway in which its configuration has not been set up properly to not affect big data.
+    # poll_t (MainPolling)        :-    1. Used to poll for node heart beat/GPS data when given a node list. 
+    #                                2. Confirms GPS data from nodes in daily cycles to disable double recording.
+    # reset_t (MainReset)        :-    1. Used to send reset commands for nodes who are deemed faulty at the time, determined by listened packets.
+    #                                2. Forward commands sent from REST SELMOS application to the SerialPort.
+    #                                3. Confirms Timetable queries for nodes who are deemed corrupted in its timetable configuration, determined by listened packets.
+    #                                4. Confirms auto-DB insert node queries for nodes who completes the reactive reset sequence, determined by listened packets.
+    # record_t (MainRecord)        :-    1. Tags faulty packets with different error types and records them. Dedicated to error log.
+    # mqtt_t (MQTT, unused)        :-    1. Client central to publish data via MQTT link to message broker.
+    #                                 2. Accepts all data asynchronously from all client sources in the message broker.
+    # REST_t (MainController)    :-    1. Server central to accept data via HTTP link from all valid client sources.
+    # http_t (MainHTTPURL)        :-    1. Client central to send data via HTTP link to rest_location
+    '''
+    try:
+        if port_status == False or options_status_dict['NOPOLL']:
+            raise
+        poll_t = MainPollingThread(my_logger, my_logger_simple, my_logger_problem, polling_queue, residual_polling_queue, GPS_confirmed_queue, pollinggap, cycletime, node_database_list, SerialProcessObject, [first_GW_data[0], second_GW_data[0]], DBAligner, LMactive_datetimenow, nodeoff_datetimenow, active_datetimenow, aggressivepoll_datetimenow, options_status_dict['GPSUP'])
+        poll_t.start()
+        poll_flag = True
+        all_other_main_threads.append((poll_t.name, poll_t))
+    except:
+        poll_t = MainPollingThread(my_logger, my_logger_simple, my_logger_problem, polling_queue, residual_polling_queue, GPS_confirmed_queue, pollinggap, cycletime, node_database_list, SerialProcessObject, [first_GW_data[0], second_GW_data[0]], DBAligner, LMactive_datetimenow, nodeoff_datetimenow, active_datetimenow, aggressivepoll_datetimenow, options_status_dict['GPSUP'])
+        poll_t.stop()
+        poll_flag = False
+        my_logger.warning('Polling thread disabled.')
+    try:
+        if port_status == False:
+            raise
+        reset_t = MainResetThread(my_logger_simple, my_logger_problem, reset_queue, REST_controller_queue, reset_G0_confirmed_queue, TT_query_queue, 0.5, 3, SerialProcessObject)
+        reset_t.start()
+        reset_flag = True
+        all_other_main_threads.append((reset_t.name, reset_t))
+    except:
+        reset_t = MainResetThread(my_logger_simple, my_logger_problem, reset_queue, REST_controller_queue, reset_G0_confirmed_queue, TT_query_queue, 0.5, 3, SerialProcessObject)
+        reset_t.stop()
+        reset_flag = False
+        my_logger.warning('Reset thread disabled.')
+    try:
+        record_t = MainRecordThread(my_logger_problem, record_queue, 1)
+        record_t.start()
+        record_flag = True
+        all_other_main_threads.append((record_t.name, record_t))
+    except:
+        record_flag = False
+        my_logger.warning('Record thread disabled.')
+    try:
+        if port_status == False:
+            raise
+        REST_t = RESTMainControllerThread('MainController', RESTAPIObject, my_logger, my_logger_simple, my_logger_problem, 0.5)
+        REST_t.start()
+        REST_flag = True
+        all_other_main_threads.append((REST_t.name, REST_t))
+    except:
+        REST_t = RESTMainControllerThread('MainController', RESTAPIObject, my_logger, my_logger_simple, my_logger_problem, 0.5)
+        REST_t.stop()
+        REST_flag = False
+        my_logger.warning('REST server thread disabled.')
+    try:
+        if port_status == False:
+            raise
+        http_t = MainHTTPURLThread(my_logger, my_logger_simple, my_logger_problem, msg_queue, full_URLstring, 0.5, options_status_dict, test_align_flag)
+        http_t.start()
+        http_flag = True
+        all_other_main_threads.append((http_t.name, http_t))
+    except:
+        http_t = MainHTTPURLThread(my_logger, my_logger_simple, my_logger_problem, msg_queue, full_URLstring, 0.5, options_status_dict, test_align_flag)
+        http_t.stop()
+        http_flag = False
+        my_logger.warning('HTTP-URL thread disabled.')
+    '''
+    [Main Listener loop start-up variables]
+    # *_threads :- Since multiple Listener processing threads can be created at the same time, these variables help to cleanly execute and kill threads as the main loop iterates.
+    # read_port_status :- Defaults to the current port status. Must be True at start. Used for dynamic port switching in code runtime.
+    # msg_recv :- Total number of received ACKs via HTTP/MQTT link, fetched from Main-type thread. Resets daily. Defaults to None if http_t/mqtt_t is not alive.
+    # msg_publish :- Total number of sent packets via HTTP/MQTT link, fetched from Main-type thread. Resets daily. Defaults to None if http_t/mqtt_t is not alive.
+    # hoursoffset :- Defaults & resets daily to 24 hours, as an increment to dynamic time checkpoints. Mainly used within active hours to record hourly statistics.
+    # If startup argument has 'DEMOUP', all manual control lantern options are allowed from various sources, and will not be reset or re-overwritten by autonomous control. Ideal for DEMO mode only. 
+    '''  
+    listener_threads = []
+    inactive_threads = []
+    inactive_other_main_threads = []
+    new_other_main_threads = []
+    read_port_status = port_status
+    msg_recv = None
+    msg_publish = None
+    hoursoffset = 24
+    last_port_index = None
+    forced_port_switch_flag = False
+    try:
+        if len(GPS_confirmed_list) != 0 and poll_t:
+            poll_t.insert_GPS_confirmed_list(list(set(GPS_confirmed_list)))
+    except:
+        pass
+    GPS_confirmed_list = None
+    '''
+    [Start of Main Listener loop]
+    '''
+    try:
+        spec_string = '[START] PYGATEWAY LISTENER @ ' + time.strftime('%d-%m-%Y %H:%M:%S', time.localtime())
+        my_logger.info(spec_string)
+        portcheck_datetimenow = datetime.datetime(*time.localtime()[:6]) + datetime.timedelta(hours=1)
+        while True:
+            datetimenow = time.strftime('%d-%m-%Y %H:%M:%S', time.localtime())
+            dt_datetimenow = datetime.datetime(*time.localtime()[:6])
+            '''Main threads (excluding loop) internal WATCHDOG manager'''
+            if len(all_other_main_threads) >= 1:
+                for k in range(0, len(all_other_main_threads)):
+                    main_thread_name, main_thread_obj = all_other_main_threads[k]
+                    try:
+                        if main_thread_obj.status():
+                            raise AttributeError
+                    except:
+                        if main_thread_name == 'MainController':
+                            err_type, err_reason = main_thread_obj.status_error_reason()
+                            if err_type == 'OSError' and err_reason.find('Address already in use') != -1:
+                                my_logger.debug(main_thread_name + ' in use by other processes.')
+                                my_logger_problem.error(main_thread_name + ' in use by other processes.')
+                                inactive_other_main_threads.append(all_other_main_threads[k])
+                                continue
+                        my_logger.debug(main_thread_name + ' exited unexpectedly, reviving thread...')
+                        my_logger_problem.error(main_thread_name + ' exited unexpectedly, reviving thread...')
+                        new_main_thread_obj = main_thread_obj.clone()
+                        main_thread_obj.stop()
+                        if main_thread_name == 'MainPolling':
+                            poll_t = new_main_thread_obj
+                            poll_t.set_pause_status(SerialProcessObject)
+                            poll_flag = True
+                        elif main_thread_name == 'MainReset':
+                            reset_t = new_main_thread_obj
+                            reset_t.set_pause_status(SerialProcessObject)
+                            reset_flag = True
+                        elif main_thread_name == 'MainRecord':
+                            record_t = new_main_thread_obj
+                            record_flag = True
+                        elif main_thread_name == 'MainHTTPURLConnection':
+                            http_t = new_main_thread_obj
+                            http_flag = True
+                        elif main_thread_name == 'MainController':
+                            REST_t = new_main_thread_obj
+                            REST_flag = True
+                        inactive_other_main_threads.append(all_other_main_threads[k])
+                        new_main_thread_obj.start()
+                        new_other_main_threads.append((new_main_thread_obj.name, new_main_thread_obj))
+                if len(inactive_other_main_threads)    >= 1:
+                    for l in range(0, len(inactive_other_main_threads)):
+                        all_other_main_threads.remove(inactive_other_main_threads[l])
+                    inactive_other_main_threads.clear()
+                if len(new_other_main_threads) >= 1:
+                    for m in range(0, len(new_other_main_threads)):
+                        all_other_main_threads.append(new_other_main_threads[m])
+                    new_other_main_threads.clear()
+            '''Full database & poll list manager'''
+            if poll_flag:
+                all_poll_loop_count = poll_t.get_all_poll_loop_count()
+                if all_poll_loop_count >= 100.0:
+                    try:
+                        last_port_index = port_index
+                        location_hwreset = str(location_mod[0]) + '/hardware_reset.py'
+                        _ = subprocess.check_output('sudo python3 '+location_hwreset, shell=True)
+                        poll_t.set_all_poll_loop_count()
+                        forced_port_switch_flag = True
+                    except subprocess.CalledProcessError as err:
+                        err_string = '[HWRESET] - Error number ' + str(err.returncode) + ': ' + str(err.output)
+                        my_logger.info(err_string)
+                        my_logger_problem.warning(err_string)
+                else:
+                    poll_pulse_flag = poll_t.get_poll_pulse_status()
+                    if poll_pulse_flag is False:
+                        _ , poll_exempt_list = DBAligner.final_read(port_data)
+                        poll_t.set_poll_list(node_database_list, poll_exempt_list)
+                        poll_t.set_poll_pulse_status()
+            '''Daily parameters refresh'''
+            portchecktimedelta = portcheck_datetimenow - dt_datetimenow
+            if portchecktimedelta.days < 0:
+                portcheck_datetimenow += datetime.timedelta(hours=1)
+                read_port_status, port_data = SerialProcessObject.gw_initial(port_index, None)
+            '''
+            8/6/2021 - Moved poll_t.set_GPS_confirmed_list() to daily repositories refresh section due to changes in output only single .kml file
+            - However, reset_t.set_awaiting_E1_list() remains on-date, due to node not being recognised on-time before new GPS polling cycle.
+            '''
+            GPStimedelta = GPSactive_datetimenow - dt_datetimenow
+            if GPStimedelta.days < 0:
+                GPSactive_datetimenow += datetime.timedelta(days=1)
+                if reset_flag:
+                    reset_t.set_awaiting_E1_list()
+            if between_flag == 2:
+                pass
+            else:
+                activetimedelta = active_datetimenow - dt_datetimenow
+                inactivetimedelta = inactive_datetimenow - dt_datetimenow
+                aggressivepolltimedelta = aggressivepoll_datetimenow - dt_datetimenow
+                if aggressivepolltimedelta.days < 0 and activetimedelta.days == 0:
+                    if poll_flag:
+                        aggressive_poll_list_loaded_flag, aggressive_poll_ongoing_flag = poll_t.get_aggressive_poll_status()
+                        if aggressive_poll_list_loaded_flag is True and aggressive_poll_ongoing_flag is True:
+                            no_data_list = poll_t.timeout_aggressive_poll_ongoing()
+                            spec_string = '[AGG POLL CLOSE] Remaining nodes: ' + str(no_data_list)
+                            my_logger_simple.debug(spec_string)
+                        else:
+                            _ = poll_t.timeout_aggressive_poll_ongoing()
+                if activetimedelta.days < 0 and inactivetimedelta.days == 0:
+                    msg_recv, msg_publish = http_t.get_stats()
+                    active_datetimenow += datetime.timedelta(hours=1)
+                    hoursoffset -= 1
+                    spec_string = '[ACTIVE] HTTP link quality: ' + str(msg_publish) + '/' + str(msg_recv) + ' messages.'
+                    my_logger_simple.debug(spec_string)
+                    if poll_flag:
+                        aggressive_poll_list_loaded_flag, aggressive_poll_ongoing_flag = poll_t.get_aggressive_poll_status()
+                        if aggressivepolltimedelta.days == 0:
+                            if aggressive_poll_list_loaded_flag is False and aggressive_poll_ongoing_flag is False:
+                                poll_t.set_aggressive_poll_ongoing_flag()
+                    _ = DBAligner.dtime_active_check()
+                elif activetimedelta.days == 0 and inactivetimedelta.days < 0:
+                    msg_recv, msg_publish = http_t.get_stats()
+                    active_datetimenow += datetime.timedelta(hours=hoursoffset)
+                    aggressivepoll_datetimenow += datetime.timedelta(days=1)
+                    inactive_datetimenow += datetime.timedelta(days=1)
+                    LMactive_datetimenow += datetime.timedelta(days=1)
+                    nodeoff_datetimenow += datetime.timedelta(days=1)
+                    spec_string = '[CLOSING] HTTP link quality: ' + str(msg_publish) + '/' + str(msg_recv) + ' messages.'
+                    my_logger_simple.debug(spec_string)
+                    hoursoffset = 24
+                    if poll_flag:
+                        poll_t.set_override_off_timeframe(LMactive_datetimenow, nodeoff_datetimenow)
+                        poll_t.set_aggressive_poll_timeframe(active_datetimenow, aggressivepoll_datetimenow)
+                        poll_t.timeout_aggressive_poll_list_loaded_flag()
+                    if http_flag:
+                        http_t.set_stats()
+                    _ = DBAligner.dtime_active_check()
+                elif activetimedelta.days < 0 and inactivetimedelta.days < 0:
+                    active_datetimenow += datetime.timedelta(days=1)
+                    aggressivepoll_datetimenow += datetime.timedelta(days=1)
+                    inactive_datetimenow += datetime.timedelta(days=1)
+                    LMactive_datetimenow += datetime.timedelta(days=1)
+                    nodeoff_datetimenow += datetime.timedelta(days=1)
+                    hoursoffset = 24
+                    if poll_flag:
+                        poll_t.set_override_off_timeframe(LMactive_datetimenow, nodeoff_datetimenow)
+                        poll_t.set_aggressive_poll_timeframe(active_datetimenow, aggressivepoll_datetimenow)
+                    if http_flag:
+                        http_t.set_stats()
+                    _ = DBAligner.dtime_active_check()
+                else:
+                    pass
+            '''Daily repositories refresh'''
+            if datetimenow[0:10] != datenow:
+                datein = list(time.localtime()[0:3])
+                datenow = datetimenow[0:10]
+                kmllogfilename = '_'.join(str(it) for it in datein) + '_' + MQTT_client_ID + '_GPSscan.kml'
+                kmlpathname = maplogpath+'/'+kmllogfilename
+                new_KMLMapper = KMLMapManager()
+                try:
+                    if not os.path.isfile(kmlpathname):
+                        raise
+                    new_KMLDocumentElement, GPS_confirmed_list = new_KMLMapper.inherit_old_document_info(kmlpathname, [GPS_style1, GPS_style2, GPS_style3])
+                    try:
+                        if len(GPS_confirmed_list) != 0 and poll_t:
+                            poll_t.insert_GPS_confirmed_list(list(set(GPS_confirmed_list)))
+                    except:
+                        pass
+                    if new_KMLDocumentElement is None:
+                        raise
+                except:
+                    new_KMLDocumentElement = new_KMLMapper.ini_run(kmlpathname, [GPS_style1, GPS_style2, GPS_style3])
+                GPS_confirmed_list = None
+                KMLMapper = new_KMLMapper
+                KMLDocumentElement = new_KMLDocumentElement
+                node_database_list = DBAligner.run(my_logger, my_logger_simple, my_logger_problem, port_data, [first_GW_data, second_GW_data], options_status_dict['DBUP'])
+                if poll_flag:
+                    poll_t.set_poll_list(node_database_list, None)
+                    poll_t.set_GPS_confirmed_list()
+            '''Loop-based packet listener invoker'''
+            try:
+                packet = SerialProcessObject.read_until('#\r\n ')
+            except Exception as error:
+                if abs(dt_datetimenow.second) == 0:
+                    my_logger.error(error)
+                    my_logger_problem.error(error)
+                    time.sleep(0.5)
+                packet = b''
+                try:
+                    SerialProcessObject.force_close()
+                except:
+                    pass
+                read_port_status = False
+                if poll_flag:
+                    poll_t.freeze_monitor_clock()
+            if packet:
+                main_t = MainListenerThread(options_status_dict['DEMOUP'], my_logger, my_logger_problem, reset_queue, record_queue, msg_queue, GPS_confirmed_queue, reset_G0_confirmed_queue, TT_query_queue, node_database_list, [first_GW_data[0], second_GW_data[0]], port_data, packet, SerialProcessObject, ['D0'], ['E1', 'E2', 'E4', 'H1', 'H2', 'G0', 'P0'], KMLMapper, KMLDocumentElement, poll_t, reset_t)
+                main_t.start()
+                main_t.join()
+                listener_threads.append(main_t)
+            '''Listener thread manager for packet listeners'''
+            if len(listener_threads) >= 1:    
+                for i in range(0, len(listener_threads)):
+                    if listener_threads[i].status():
+                        listener_threads[i].join()
+                        inactive_threads.append(listener_threads[i])
+                    if listener_threads[i].get_pause_status():
+                        read_port_status = False
+                if len(inactive_threads) >= 1:
+                    for j in range(0, len(inactive_threads)):
+                        listener_threads.remove(inactive_threads[j])
+                    inactive_threads.clear()
+            '''Serial port manager'''
+            retry_logic = not read_port_status 
+            if poll_flag:
+                retry_logic |= poll_t.get_pause_status()
+            if reset_flag:
+                retry_logic |= reset_t.get_pause_status()
+            if retry_logic:
+                spo_2 = SerialObjectManager()
+                try:
+                    retry_port_status, retry_port_name, retry_port_data, retry_port_index = spo_2.ini_run(my_logger, my_logger_simple, my_logger_problem, 1, [first_GW_data, second_GW_data], port_index)
+                    if retry_port_status == True:
+                        if reset_flag:
+                            reset_t.set_pause_status(spo_2)
+                        else:
+                            all_other_main_threads.append((reset_t.name, reset_t))
+                        SerialProcessObject = spo_2
+                        read_port_status = True
+                        port_data = retry_port_data
+                        node_database_list = DBAligner.run(my_logger, my_logger_simple, my_logger_problem, port_data, [first_GW_data, second_GW_data], options_status_dict['DBUP'])
+                        if poll_flag:
+                            if forced_port_switch_flag:#reset poll loop count, reset all polling param, forced port flag False
+                                port_index = retry_port_index
+                                forced_port_switch_flag = False
+                                last_port_index = None
+                                poll_t.set_pause_status(spo_2)
+                                _ , poll_exempt_list = DBAligner.final_read(port_data)
+                                if last_port_index != retry_port_index:
+                                    poll_t.set_check_override_off_status()
+                                    poll_t.set_poll_list(node_database_list, poll_exempt_list)
+                                else:
+                                    poll_t.set_poll_list(None, poll_exempt_list)
+                            else:
+                                poll_t.set_pause_status(spo_2)
+                                _ , poll_exempt_list = DBAligner.final_read(port_data)
+                                if port_index != retry_port_index:
+                                    port_index = retry_port_index
+                                    poll_t.set_check_override_off_status()
+                                    poll_t.force_continue_loop()
+                                    poll_t.set_poll_list(node_database_list, poll_exempt_list)
+                                else:
+                                    poll_t.set_poll_list(None, poll_exempt_list)
+                        else:
+                            if options_status_dict['NOPOLL']:
+                                all_other_main_threads.append((poll_t.name, poll_t))
+                        if not http_flag:
+                            all_other_main_threads.append((http_t.name, http_t))
+                        if not REST_flag:
+                            all_other_main_threads.append((REST_t.name, REST_t))
+                    else:
+                        if abs(dt_datetimenow.second) == 0:
+                            my_logger.debug('All serial ports cannot be opened: reconnecting...')
+                            my_logger_simple.debug('All serial ports cannot be opened: reconnecting...')
+                            time.sleep(0.5)
+                except serial.SerialException as error:
+                    if abs(dt_datetimenow.second) == 0:
+                        my_logger.debug(error)
+                        my_logger_simple.debug(error)
+                        time.sleep(0.5)
+    finally:
+        if poll_flag:
+            poll_t.stop()
+            poll_t.join()
+        if reset_flag:
+            reset_t.stop()
+            reset_t.join()
+        if record_flag:
+            record_t.stop()
+            record_t.join()
+        if http_flag:
+            http_t.stop()
+            http_t.join()
+        if REST_flag:
+            REST_t.stop()
+            REST_t.join()
+        for threads in listener_threads:
+            threads.stop()
+            threads.join()
+        my_logger.debug('All threading processes stopped.')
+        my_logger_simple.debug('All threading processes stopped.')
+    
+
+if __name__ == '__main__':
+    main()

@@ -566,3 +566,17 @@
 
 2026-08-19,10:01:00:ERROR MainThread:4165 - Attempting to use a port that is not open
 
+2026-08-21,15:15:13:ERROR MainThread:421 - DBUP - PostgreSQL database cannot be accessed while updating GW nodes.
+
+2026-08-21,15:15:13:WARNING MainThread:83 - cannot access local variable 'connection' where it is not associated with a value
+
+2026-08-21,15:15:13:ERROR MainThread:183 - DBUP - PostgreSQL database has no target nodes, deactivating code.
+
+2026-08-21,15:16:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-21,15:17:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-21,15:18:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-21,15:19:00:ERROR MainThread:466 - Attempting to use a port that is not open
+

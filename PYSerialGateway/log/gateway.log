@@ -4087,3 +4087,42 @@ Attempting to use a port that is not open
 
 2026-08-19,10:01:22:DEBUG MainThread:4270 - All threading processes stopped.
 
+2026-08-21 15:15:13,140  WARNING  MainThread:213 -
+Polling thread disabled.
+
+2026-08-21 15:15:13,141  WARNING  MainThread:225 -
+Reset thread disabled.
+
+2026-08-21,15:15:13:DEBUG MainThread:363 - MainController - REST SERVER halted.
+
+2026-08-21 15:15:13,142  WARNING  MainThread:245 -
+REST server thread disabled.
+
+2026-08-21 15:15:13,142  WARNING  MainThread:257 -
+HTTP-URL thread disabled.
+
+2026-08-21 15:15:13,142  INFO  MainThread:288 -
+[START] PYGATEWAY LISTENER @ 21-08-2026 15:15:13
+
+2026-08-21 15:16:00,001  ERROR  MainThread:465 -
+Attempting to use a port that is not open
+
+2026-08-21,15:16:00:DEBUG MainThread:544 - All serial ports cannot be opened: reconnecting...
+
+2026-08-21 15:17:00,003  ERROR  MainThread:465 -
+Attempting to use a port that is not open
+
+2026-08-21,15:17:00:DEBUG MainThread:544 - All serial ports cannot be opened: reconnecting...
+
+2026-08-21 15:18:00,001  ERROR  MainThread:465 -
+Attempting to use a port that is not open
+
+2026-08-21,15:18:00:DEBUG MainThread:544 - All serial ports cannot be opened: reconnecting...
+
+2026-08-21 15:19:00,000  ERROR  MainThread:465 -
+Attempting to use a port that is not open
+
+2026-08-21,15:19:00:DEBUG MainThread:544 - All serial ports cannot be opened: reconnecting...
+
+2026-08-21,15:19:43:DEBUG MainThread:571 - All threading processes stopped.
+
