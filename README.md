@@ -62,23 +62,32 @@ concatenated flag string inside `main()`):
 ```
 pyserialgateway/PYGatewayListener/
 ├── __init__.py             re-exports main()
-├── config.py                argparse + pygw_conf + encrypted cert bundle loading
-├── utils.py                  Clock, StatObjectExceptionAPI
-├── database_aligner.py       DatabaseAligner
-├── kml_manager.py             KMLMapManager
-├── serial_manager.py          SerialObjectManager
-├── rest_api.py                 RESTAPI, RESTMainControllerThread
-├── http_thread.py              MainHTTPURLThread
-├── record_thread.py            MainRecordThread
-├── reset_thread.py             MainResetThread
-├── polling_thread.py           MainPollingThread
-├── gps_database_thread.py      GPSDatabaseThread
-├── database_thread.py          DatabaseThread
-├── recovery_thread.py          RecoveryThread
-├── gps_thread.py               GPSThread
-├── timetable_thread.py         TimetableThread
-├── main_listener_thread.py     MainListenerThread
-└── main.py                     main() orchestration function
+├── config.py                argparse + pygw_conf + encrypted cert bundle loading + db_* settings
+├── db_connection.py          get_connection() - centralized PostgreSQL connection helper
+├── utils.py                   Clock, StatObjectExceptionAPI
+├── database_aligner.py        DatabaseAligner
+├── kml_manager.py               KMLMapManager
+├── serial_manager.py            SerialObjectManager
+├── rest_api.py                   RESTAPI, RESTMainControllerThread
+├── http_thread.py                MainHTTPURLThread
+├── record_thread.py              MainRecordThread
+├── reset_thread.py               MainResetThread
+├── polling_thread.py             MainPollingThread
+├── gps_database_thread.py        GPSDatabaseThread
+├── database_thread.py            DatabaseThread
+├── recovery_thread.py            RecoveryThread
+├── gps_thread.py                 GPSThread
+├── timetable_thread.py           TimetableThread
+├── main_listener_thread.py       MainListenerThread
+└── main.py                       main() orchestration function
+```
+
+Outside the package, two config files feed `config.py` (see the updated
+`config.py` reference in §6 for the full mechanism):
+
+```
+PYSerialGateway/pygw_conf.py             site-specific config for this deployment (tried first)
+pyserialgateway/config_PYproperties.py   packaged template/fallback (placeholder values)
 ```
 
 ## 4. High-level architecture
@@ -161,6 +170,34 @@ module that does `from .config import X` triggers this exactly once
   `full_URLstring` (upstream POST URL), `auth_key_pair` (basic-auth
   credentials + main-server auth pair), and `cert_location` (TLS client
   cert path for the main-server HTTPS leg).
+- **`db_host`/`db_port`/`db_user`/`db_password`/`db_name`** — PostgreSQL
+  connection settings, each read via `getattr(pygw_conf, 'db_x', default)`
+  rather than direct attribute access (unlike everything else in this
+  file). The defaults exactly match what used to be hardcoded in every
+  `psycopg2.connect(...)` call before `db_connection.py` existed (local
+  Unix socket, user `radxa`, port `5432`, database
+  `serial-gateway-program`, no password), so a `pygw_conf.py` that
+  predates these settings keeps working unchanged. `db_host`/`db_password`
+  default to `None`, meaning "connect via local Unix socket with peer
+  authentication" — set them to deploy against a remote or
+  password-authenticated Postgres instead. See `db_connection.py` below
+  for how these get turned into an actual connection.
+
+### `db_connection.py`
+
+One function: **`get_connection()`**. Builds a `psycopg2.connect(...)`
+kwargs dict from `config.py`'s `db_*` settings — `host` and `password` are
+only included if actually set (`None`/falsy skips them), so the default,
+unconfigured case connects via the local Unix socket with peer
+authentication, identical to the hardcoded calls it replaces. Every DB
+call site (`database_aligner.py`, `database_thread.py`,
+`gps_database_thread.py`) calls this instead of `psycopg2.connect(...)`
+directly, so deploying against a different database (different OS user,
+a remote host, a different database name) only requires editing
+`pygw_conf.py` — no source file needs to change. Confirmed
+`host=None`/omitted-`host` are behaviorally identical for `psycopg2`, so
+this substitution doesn't change connection behavior for existing
+deployments.
 
 ### `utils.py`
 
@@ -183,8 +220,12 @@ module that does `from .config import X` triggers this exactly once
 ### `database_aligner.py` — `DatabaseAligner`
 
 All PostgreSQL/local-CSV alignment logic for the node list. Every DB
-method opens its own `psycopg2` connection and closes it in a `finally`
-block (i.e. no connection pooling).
+method opens its own connection via `db_connection.get_connection()` and
+closes it in a `finally` block (i.e. no connection pooling) — previously
+each of these 9 call sites had its own hardcoded
+`psycopg2.connect(user='radxa', port='5432',
+database='serial-gateway-program')`; now they all go through the shared
+helper instead.
 
 - **`basic_exec(*args)`** — runs an arbitrary `(query_string, data)` pair.
 - **`DB_delete_node_DB(*args)`** — deletes a node row from `node_database`.
@@ -434,8 +475,9 @@ in-code for exact semantics of each.
 One-shot thread: given a single node's confirmed lat/long/description, it
 either `UPDATE`s the existing `node_database` row (if the node is already
 known) or auto-`INSERT`s a new `TBD-AUTO` row (new install detected via
-GPS before it's been manually registered). Silently ignores update
-failures specifically for `TBD-AUTO` rows (expected/benign race).
+GPS before it's been manually registered). Connects via
+`db_connection.get_connection()`. Silently ignores update failures
+specifically for `TBD-AUTO` rows (expected/benign race).
 
 ### `database_thread.py` — `DatabaseThread`
 
@@ -444,8 +486,8 @@ packets from one listen cycle), this is the message-ID reconciliation
 engine against `filter_time_py`.
 
 - **`postgres_fetch` / `postgres_update`** — thin per-call
-  connect/execute/close wrappers (see `DatabaseAligner` for the same
-  pattern).
+  connect (via `db_connection.get_connection()`) /execute/close wrappers
+  (see `DatabaseAligner` for the same pattern).
 - **`postgres_timecheck(data_time, packet_time)`** — returns
   `(True, delta)` if the DB's stored time is older than the packet's
   claimed time (i.e. progress), `(False, delta)` if it's newer (i.e. an
@@ -685,3 +727,47 @@ they aren't mistaken for something the split introduced.
   own top level), which is why `pygw_main.py` needs the sibling
   `pyserialgateway/` directory to be discoverable on `sys.path` — handled
   via a `sys.path.insert` bootstrap at the top of `pygw_main.py`.
+
+## 9. Deployment artifacts (outside the package)
+
+These live alongside the code rather than inside
+`pyserialgateway/PYGatewayListener/`, but are needed to actually run it
+on a machine.
+
+- **`PYSerialGateway/pygw_conf.py`** — the live, site-specific config for
+  one deployment. This is what you actually edit per-machine: paths,
+  timing windows, gateway node identities, cert codename, and (as of the
+  latest changes) the `db_host`/`db_port`/`db_user`/`db_password`/
+  `db_name` block. Bare `import pygw_conf` in `config.py` finds this
+  because Python adds the running script's own directory
+  (`PYSerialGateway/`, where `pygw_main.py` lives) to `sys.path`
+  automatically.
+- **`pyserialgateway/config_PYproperties.py`** — the packaged
+  template/fallback, used only if `pygw_conf` can't be imported at all.
+  Same fields as `pygw_conf.py`, but with placeholder values
+  (`INSERTDBUSERHERE`-style) rather than working ones — this is what a
+  new deployment's `pygw_conf.py` should start from.
+- **`create_db.sql`** — one-time setup script for a fresh Postgres
+  instance: creates the `serial-gateway-program` database and its two
+  tables (`node_database`, `filter_time_py`) with column
+  names/types/indexes matched directly against the queries in
+  `database_aligner.py`/`database_thread.py`/`gps_database_thread.py`
+  (notably: `dtime` must be `TIMESTAMP` not `TIMESTAMPTZ`, and
+  `dec_count`/`rollover_count`/`miss_count` need `DEFAULT 0` — see the
+  script's own comments for why). Deliberately has no `UNIQUE`/`PRIMARY
+  KEY` constraint on `node` or `(node, ack)`, since `DatabaseAligner`/
+  `DatabaseThread` both have branches that expect to encounter and clean
+  up duplicate rows themselves; a hard constraint would turn that
+  expected case into an unhandled `IntegrityError` instead. Also grants
+  the configured `db_user` table/sequence privileges as its last step.
+- **`pygateway.service`** — systemd unit for running this on boot with
+  auto-restart. Two non-obvious settings worth knowing if this ever needs
+  editing: `Restart=always` (not the more common `on-failure`) is
+  required because `pygw_main.py` always exits `0` even after an internal
+  crash (it catches every exception and calls `sys.exit(0)` in a
+  `finally` block), so `on-failure` would never actually trigger; and
+  `User=` must match whatever OS user your Postgres role/peer-auth is set
+  up for, since the DB calls connect with no password by default.
+- **`requirements.txt`** — the non-stdlib pip dependencies:
+  `Flask`, `wsgiserver`, `psycopg2-binary`, `requests`, `pyserial`,
+  `cryptography`, `psutil`, `lxml`, `pykml`.
