@@ -117,3 +117,30 @@ full_URLstring = param_dict['rest_location'].replace('[','').replace(']','').rep
 auth_key_pair = param_dict['auth_key'].replace('[','').replace(']','').replace('\'','').replace(' ','').split(',')
 cert_location = param_dict['cert_loc_linux'].replace('[','').replace(']','').replace('\'','').split(',')[0]
 
+# PostgreSQL connection settings, read from pygw_conf.py so a deployment
+# on a different machine (different OS user, different DB host, a
+# separate Postgres instance) only requires editing pygw_conf.py.
+# getattr(...) defaults exactly match what used to be hardcoded in every
+# psycopg2.connect(...) call, so an existing pygw_conf.py that predates
+# these settings keeps working unchanged.
+db_host = getattr(pygw_conf, 'db_host', None)          # None -> local Unix socket (unchanged default)
+db_port = getattr(pygw_conf, 'db_port', '5432')
+db_user = getattr(pygw_conf, 'db_user', 'radxa')
+db_password = getattr(pygw_conf, 'db_password', None)  # None -> no password (peer auth, unchanged default)
+db_name = getattr(pygw_conf, 'db_name', 'serial-gateway-program')
+
+'''
+[Database connection settings]
+Read from pygw_conf with defaults that match exactly what used to be
+hardcoded in every psycopg2.connect(...) call (local Unix socket, user
+'radxa', port 5432, database 'serial-gateway-program', no password), so
+an existing pygw_conf.py that predates these settings keeps working
+unchanged. To deploy against a different Postgres user/host/port/database,
+add the matching db_* variable(s) to pygw_conf.py - nothing in the code
+itself needs to change.
+'''
+db_host = getattr(pygw_conf, 'db_host', None)
+db_port = getattr(pygw_conf, 'db_port', '5432')
+db_user = getattr(pygw_conf, 'db_user', 'radxa')
+db_password = getattr(pygw_conf, 'db_password', None)
+db_name = getattr(pygw_conf, 'db_name', 'serial-gateway-program')

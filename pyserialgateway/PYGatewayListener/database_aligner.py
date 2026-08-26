@@ -7,10 +7,10 @@ import errno
 import collections
 import random
 import datetime
-import psycopg2
 import csv
 
 from .config import updating_database_localpath, first_GW_data, second_GW_data
+from .db_connection import get_connection
 
 class DatabaseAligner():
     '''Object that contains all Database-type commands needed'''
@@ -18,7 +18,7 @@ class DatabaseAligner():
         '''Delete data entry for a particular node in PostgreSQL node list.'''
         data, query_string = args
         try:
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             connection.set_session(autocommit=True)
             cursor = connection.cursor()
             cursor.execute(query_string, data)
@@ -32,7 +32,7 @@ class DatabaseAligner():
         '''Delete data entry for a particular node in PostgreSQL node list.'''
         data = args
         try:
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             connection.set_session(autocommit=True)
             cursor = connection.cursor()
             query = '''delete from node_database where node = %s'''
@@ -47,7 +47,7 @@ class DatabaseAligner():
         '''Delete data entry for a particular node in PostgreSQL data packets list.'''
         data = args
         try:
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             connection.set_session(autocommit=True)
             cursor = connection.cursor()
             query = '''delete from filter_time_py where node = %s and ack = %s'''
@@ -73,7 +73,7 @@ class DatabaseAligner():
             else:
                 insert_header += str(items) + ','
         try:
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             connection.set_session(autocommit=True)
             cursor = connection.cursor()
             query = '''select * from node_database where node = %s'''
@@ -131,7 +131,7 @@ class DatabaseAligner():
         '''Load all data from PostgreSQL node list.'''
         try:
             empty_nodelist = []
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             cursor = connection.cursor()
             query = '''select * from node_database'''
             cursor.execute(query)
@@ -160,7 +160,7 @@ class DatabaseAligner():
             poll_exempt_nodelist = []
             node_temp_sortlist = {}
             sorted_nodelist = {}
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             cursor = connection.cursor()
             query = '''select * from node_database where pan_id = %s and channel = %s'''
             cursor.execute(query, (port_data[1], port_data[2]))
@@ -197,7 +197,7 @@ class DatabaseAligner():
             out_of_timerange_nodelist = []
             empty_nodelist = []
             latest_status_tuple_list = []
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             cursor = connection.cursor()
             for i in range(0, len(self.node_database_list)):
                 if self.node_database_list[i] in self.poll_exempt_list or self.node_database_list[i] in self.gatewaynode_idlist:
@@ -245,7 +245,7 @@ class DatabaseAligner():
             residual_nodelist = []
             empty_nodelist = []
             latest_status_tuple_list = []
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             cursor = connection.cursor()
             for i in range(0, len(self.node_database_list)):
                 if self.node_database_list[i] in self.poll_exempt_list or self.node_database_list[i] in self.gatewaynode_idlist:
@@ -289,7 +289,7 @@ class DatabaseAligner():
         '''Deletes all corrupted data entries with its entry time stamp being beyond the current time.'''
         try:
             delete_tuple_list = []
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             cursor = connection.cursor()
             sp_query = '''select dtime, node, ack from filter_time_py'''
             cursor.execute(sp_query)
@@ -425,4 +425,3 @@ class DatabaseAligner():
         self.logger.debug(info_string)
         self.simple_logger.debug(info_string)
         return self.node_database_list
-

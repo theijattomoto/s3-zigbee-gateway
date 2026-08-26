@@ -7,6 +7,7 @@ import psycopg2
 import threading
 
 from .config import msgID, msgID_vers, max_msgID_count
+from .db_connection import get_connection
 
 class DatabaseThread(threading.Thread):
     def __init__(self, packet_logger, problem_logger, msg_queue, node_ID_list, node_ID_datalist, ack, dtime_list, message_ID_list, override_flag_list, lamp_status_list):
@@ -26,7 +27,7 @@ class DatabaseThread(threading.Thread):
     
     def postgres_fetch(self, node_ID, ack):
         try:
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             cursor = connection.cursor()
             fetch_query = '''select dtime, msgid, dec_count, rollover_count, miss_count from filter_time_py where node = %s and ack = %s'''
             cursor.execute(fetch_query, (node_ID, ack))
@@ -58,7 +59,7 @@ class DatabaseThread(threading.Thread):
     
     def postgres_update(self, sp_data, sp_query):
         try:
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             connection.set_session(autocommit=True)
             cursor = connection.cursor()
             cursor.execute(sp_query, sp_data)
@@ -229,4 +230,3 @@ class DatabaseThread(threading.Thread):
         
     def stop(self):
         self.stop_event.set()
-

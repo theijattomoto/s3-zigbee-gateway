@@ -580,3 +580,99 @@
 
 2026-08-21,15:19:00:ERROR MainThread:466 - Attempting to use a port that is not open
 
+2026-08-24,06:18:04:WARNING MainThread:83 - 'NoneType' object is not subscriptable
+
+2026-08-24,06:18:04:ERROR MainThread:183 - DBUP - PostgreSQL database has no target nodes, deactivating code.
+
+2026-08-24,06:19:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,07:02:45:WARNING MainThread:83 - 'NoneType' object is not subscriptable
+
+2026-08-24,07:02:45:ERROR MainThread:183 - DBUP - PostgreSQL database has no target nodes, deactivating code.
+
+2026-08-24,07:09:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,07:19:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,07:28:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,07:38:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,07:48:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,07:58:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,08:03:07:WARNING MainThread:83 - 'NoneType' object is not subscriptable
+
+2026-08-24,08:03:07:ERROR MainThread:183 - DBUP - PostgreSQL database has no target nodes, deactivating code.
+
+2026-08-24,08:13:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,08:23:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,08:32:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,08:42:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,08:51:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,09:01:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,09:03:22:WARNING MainThread:83 - 'NoneType' object is not subscriptable
+
+2026-08-24,09:03:22:ERROR MainThread:183 - DBUP - PostgreSQL database has no target nodes, deactivating code.
+
+2026-08-24,09:06:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,09:16:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,09:26:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-24,09:31:24:WARNING MainThread:83 - 'NoneType' object is not subscriptable
+
+2026-08-24,09:31:24:ERROR MainThread:183 - DBUP - PostgreSQL database has no target nodes, deactivating code.
+
+2026-08-26,00:18:44:WARNING MainThread:83 - 'NoneType' object is not subscriptable
+
+2026-08-26,00:18:44:ERROR MainThread:183 - DBUP - PostgreSQL database has no target nodes, deactivating code.
+
+2026-08-26,00:25:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,00:34:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,00:43:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,00:51:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,01:00:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,01:09:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,01:17:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,01:19:06:WARNING MainThread:83 - 'NoneType' object is not subscriptable
+
+2026-08-26,01:19:06:ERROR MainThread:183 - DBUP - PostgreSQL database has no target nodes, deactivating code.
+
+2026-08-26,01:29:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,01:37:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,01:45:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,01:54:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,02:03:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,02:08:48:WARNING MainThread:83 - 'NoneType' object is not subscriptable
+
+2026-08-26,02:08:48:ERROR MainThread:183 - DBUP - PostgreSQL database has no target nodes, deactivating code.
+
+2026-08-26,02:09:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,02:18:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,02:28:00:ERROR MainThread:466 - Attempting to use a port that is not open
+
+2026-08-26,02:39:00:ERROR MainThread:466 - Attempting to use a port that is not open
+

@@ -25,6 +25,18 @@ localDBpath = 'INSERTCSVNAMEHERE.csv'			    		    # Local deploy node list file 
 first_GW_data = ('FE01', '1001', '20')                          # First gateway node specifications
 second_GW_data = ('FE02', '1001', '20')                         # Second gateway node specifications
 
+# PostgreSQL connection - edit these to match this machine's database setup.
+# db_host=None and db_password=None mean "connect via local Unix socket
+# with peer authentication" (i.e. db_user must match the OS user this
+# script runs as). Set db_host to an address/hostname and db_password to
+# a real password to connect to a remote/password-authenticated Postgres
+# instead.
+db_host = None
+db_port = '5432'
+db_user = 'INSERTDBUSERHERE'
+db_password = None
+db_name = 'INSERTDBNAMEHERE'
+
 # Auto-generated files repositories
 problemlogpath = 'errorlog'
 logfilepath = 'log'                                 		    # Local log repository

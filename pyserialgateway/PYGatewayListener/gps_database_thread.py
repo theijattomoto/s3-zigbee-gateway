@@ -5,6 +5,8 @@ PostgreSQL.
 import psycopg2
 import threading
 
+from .db_connection import get_connection
+
 class GPSDatabaseThread(threading.Thread):
     def __init__(self, packet_logger, problem_logger, node_ID, description, latitude, longitude, port_data, node_database_list):
         super(GPSDatabaseThread, self).__init__()
@@ -22,7 +24,7 @@ class GPSDatabaseThread(threading.Thread):
     
     def postgres_update(self, sp_data, sp_query):
         try:
-            connection = psycopg2.connect(user='pi', port='5432', database='serial-gateway-program')
+            connection = get_connection()
             connection.set_session(autocommit=True)
             cursor = connection.cursor()
             cursor.execute(sp_query, sp_data)
@@ -58,5 +60,3 @@ class GPSDatabaseThread(threading.Thread):
     
     def stop(self):
         self.stop_event.set()
-        
-
