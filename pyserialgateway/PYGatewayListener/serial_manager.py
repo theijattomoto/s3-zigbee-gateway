@@ -2,12 +2,34 @@
 SerialObjectManager: wraps serial.Serial to discover, open, and manage the
 USB/COM gateway serial port.
 '''
+import threading
+
 import serial
 import serial.tools.list_ports as srl_tools
 import fcntl
 
 class SerialObjectManager(serial.Serial):
     '''Serial object containing functions to dynamically execute read-write functions over its designated port.'''
+
+    def __init__(self, *args, **kwargs):
+        # MainPollingThread and MainResetThread share the same serial object.
+        # Serialize writes and port lifecycle operations so one thread cannot
+        # close/reopen the descriptor while another thread is writing to it.
+        self._io_lock = threading.RLock()
+        super().__init__(*args, **kwargs)
+
+    def write(self, data):
+        with self._io_lock:
+            return super().write(data)
+
+    def open(self):
+        with self._io_lock:
+            return super().open()
+
+    def close(self):
+        with self._io_lock:
+            return super().close()
+
     def serial_open_gateway(self):
         '''
         Internal function specially called by ini_run INIT, repeatedly according to the number of different self.gateway_name.
