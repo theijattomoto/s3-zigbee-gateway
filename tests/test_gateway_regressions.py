@@ -83,14 +83,9 @@ class SerialObjectManagerTests(unittest.TestCase):
 
     def test_force_close_unlocks_own_descriptor_and_closes_port(self):
         manager = self.serial_manager.SerialObjectManager(port=None)
+        manager.is_open = True
 
         with (
-            mock.patch.object(
-                type(manager),
-                "is_open",
-                new_callable=mock.PropertyMock,
-                return_value=True,
-            ),
             mock.patch.object(manager, "fileno", return_value=42) as fileno,
             mock.patch.object(manager, "close") as close,
             mock.patch.object(self.serial_manager.fcntl, "flock") as flock,
