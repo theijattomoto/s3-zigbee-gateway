@@ -1,28 +1,15 @@
 #! /usr/bin/python3
 '''
-Startup argument parsing and external configuration loading for the gateway listener.
+External configuration loading for the gateway listener.
 
-This module is unchanged in *logic* from the original single-file script -
-it just gathers the bits that used to sit at the top and in the middle of
-PYGatewayListener.py (argument parsing, the pygw_conf-derived settings, and
-the encrypted rest_location/auth_key/cert bundle loading) into one place.
+Command-line options are intentionally not parsed in this module. The launcher
+(PYSerialGateway/pygw_main.py) passes its option string to main(), which keeps
+module imports free from argparse side effects and allows the factorized
+modules to be imported by tests and other Python code.
 
-Every other module in this package imports the values it needs from here,
-the same way they used to read them as bare module-level globals when
-everything lived in one file.
+The remaining settings are loaded from pygw_conf.py and the encrypted
+rest_location/auth_key/cert bundle, preserving the existing runtime behavior.
 '''
-import argparse
-
-desp_parser = argparse.ArgumentParser(description='Process house for Serial data in gateways.')
-desp_parser.add_argument('test_gps_flag', metavar='GPSUP', type=str, nargs='?', help='Enable GPS node mapping function.')
-desp_parser.add_argument('test_db_refresh_flag', metavar='DBUP', type=str, nargs='?', help='Enable local DB refresh function.')
-desp_parser.add_argument('test_demo_flag', metavar='DEMOUP', type=str, nargs='?', help='Enable non-recovery static demo mode.')
-desp_parser.add_argument('test_nopoll_flag', metavar='NOPOLL', type=str, nargs='?', help='Disable active data polling feature.')
-desp_parser.add_argument('test_noselmos_flag', metavar='NOSELMOS', type=str, nargs='?', help='Disable all data sending features to main server.')
-desp_parser.add_argument('test_noauth_flag', metavar='NOAUTH', type=str, nargs='?', help='Disable \'level 1 security feature\'.')
-desp_parser.add_argument('test_uptest_flag', metavar='TESTUP', type=str, nargs='?', help='Redirect data to only backup server.')
-args = desp_parser.parse_args()
-
 import sys, os
 import zipfile
 import cryptography.fernet as fcrypto
