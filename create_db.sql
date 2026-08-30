@@ -1,12 +1,12 @@
 -- Run as: sudo -u postgres psql -f create_db.sql
 -- sudo -u postgres psql < create_db.sql # INCASE CMD ABOVE FAILS
--- 
+--
 -- Creates the "serial-gateway-program" database and the two tables the
 -- gateway listener code reads/writes: node_database and filter_time_py.
 -- Column names/types are taken directly from the queries in
 -- database_aligner.py, database_thread.py, and gps_database_thread.py.
 
-CREATE DATABASE "serial-gateway-program" OWNER radxa;
+CREATE DATABASE "serial-gateway-program" OWNER pi;
 
 \c "serial-gateway-program"
 
@@ -53,6 +53,6 @@ CREATE TABLE filter_time_py (
 
 CREATE INDEX idx_filter_time_py_node_ack ON filter_time_py (node, ack);
 
--- Table/sequence-level privileges for the radxa role.
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO radxa;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO radxa;
+-- Table/sequence-level privileges for the pi role.
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO pi;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO pi;
