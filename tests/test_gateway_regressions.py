@@ -85,16 +85,19 @@ class SerialObjectManagerTests(unittest.TestCase):
         manager = self.serial_manager.SerialObjectManager(port=None)
         manager.is_open = True
 
-        with (
-            mock.patch.object(manager, "fileno", return_value=42) as fileno,
-            mock.patch.object(manager, "close") as close,
-            mock.patch.object(self.serial_manager.fcntl, "flock") as flock,
-        ):
-            manager.force_close()
+        try:
+            with (
+                mock.patch.object(manager, "fileno", return_value=42) as fileno,
+                mock.patch.object(manager, "close") as close,
+                mock.patch.object(self.serial_manager.fcntl, "flock") as flock,
+            ):
+                manager.force_close()
 
-        fileno.assert_called_once_with()
-        flock.assert_called_once_with(42, self.serial_manager.fcntl.LOCK_UN)
-        close.assert_called_once_with()
+            fileno.assert_called_once_with()
+            flock.assert_called_once_with(42, self.serial_manager.fcntl.LOCK_UN)
+            close.assert_called_once_with()
+        finally:
+            manager.is_open = False
 
 
 class MainListenerPacketTests(unittest.TestCase):
