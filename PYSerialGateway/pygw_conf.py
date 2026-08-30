@@ -25,15 +25,13 @@ localDBpath = 'samplelist.csv'			    		    # Local deploy node list file in Rasp
 first_GW_data = ('FE01', '1001', '20')                          # First gateway node specifications
 second_GW_data = ('FE02', '1001', '20')                         # Second gateway node specifications
 
-# PostgreSQL connection - edit these to match this machine's database setup.
+# PostgreSQL connection - keep the monolithic gateway defaults.
 # db_host=None and db_password=None mean "connect via local Unix socket
-# with peer authentication" (i.e. db_user must match the OS user this
-# script runs as). Set db_host to an address/hostname and db_password to
-# a real password to connect to a remote/password-authenticated Postgres
-# instead.
+# with peer authentication", matching the original psycopg2.connect(...)
+# calls that used the Raspberry Pi OS user 'pi'.
 db_host = None
 db_port = '5432'
-db_user = 'radxa'
+db_user = 'pi'
 db_password = None
 db_name = 'serial-gateway-program'
 
