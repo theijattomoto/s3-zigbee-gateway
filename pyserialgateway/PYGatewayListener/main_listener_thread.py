@@ -257,10 +257,10 @@ class MainListenerThread(threading.Thread):
                 self.stop()            
             else:
                 raise
-        except:
+        except Exception:
+            self.problem_logger.exception('Unhandled exception while processing serial packet in MainListenerThread.')
             self.stop()
     
     def stop(self):
         '''Functions to be executed if an unexpected exit has occurred, to both the super thread or the overall script. Stop event is set to cleanly exit the super thread.'''
         self.stop_event.set()
-
