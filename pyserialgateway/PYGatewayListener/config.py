@@ -104,14 +104,11 @@ full_URLstring = param_dict['rest_location'].replace('[','').replace(']','').rep
 auth_key_pair = param_dict['auth_key'].replace('[','').replace(']','').replace('\'','').replace(' ','').split(',')
 cert_location = param_dict['cert_loc_linux'].replace('[','').replace(']','').replace('\'','').split(',')[0]
 
-# PostgreSQL connection settings, read from pygw_conf.py so a deployment
-# on a different machine (different OS user, different DB host, a
-# separate Postgres instance) only requires editing pygw_conf.py.
-# getattr(...) defaults exactly match what used to be hardcoded in every
-# psycopg2.connect(...) call, so an existing pygw_conf.py that predates
-# these settings keeps working unchanged.
-db_host = getattr(pygw_conf, 'db_host', None)          # None -> local Unix socket (unchanged default)
+# PostgreSQL connection settings, read from pygw_conf.py so deployment-specific
+# details stay in one place. Defaults intentionally match the original
+# monolithic gateway's psycopg2.connect(...) calls.
+db_host = getattr(pygw_conf, 'db_host', None)          # None -> local Unix socket
 db_port = getattr(pygw_conf, 'db_port', '5432')
-db_user = getattr(pygw_conf, 'db_user', 'radxa')
-db_password = getattr(pygw_conf, 'db_password', None)  # None -> no password (peer auth, unchanged default)
+db_user = getattr(pygw_conf, 'db_user', 'pi')
+db_password = getattr(pygw_conf, 'db_password', None)  # None -> peer authentication
 db_name = getattr(pygw_conf, 'db_name', 'serial-gateway-program')
