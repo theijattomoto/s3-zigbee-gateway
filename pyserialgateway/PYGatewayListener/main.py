@@ -511,16 +511,17 @@ def main(*args):
                         node_database_list = DBAligner.run(my_logger, my_logger_simple, my_logger_problem, port_data, [first_GW_data, second_GW_data], options_status_dict['DBUP'])
                         if poll_flag:
                             if forced_port_switch_flag:#reset poll loop count, reset all polling param, forced port flag False
+                                previous_port_index = last_port_index
                                 port_index = retry_port_index
                                 forced_port_switch_flag = False
-                                last_port_index = None
                                 poll_t.set_pause_status(spo_2)
                                 _ , poll_exempt_list = DBAligner.final_read(port_data)
-                                if last_port_index != retry_port_index:
+                                if previous_port_index != retry_port_index:
                                     poll_t.set_check_override_off_status()
                                     poll_t.set_poll_list(node_database_list, poll_exempt_list)
                                 else:
                                     poll_t.set_poll_list(None, poll_exempt_list)
+                                last_port_index = None
                             else:
                                 poll_t.set_pause_status(spo_2)
                                 _ , poll_exempt_list = DBAligner.final_read(port_data)
