@@ -1,7 +1,7 @@
 '''
 Centralized PostgreSQL connection helper.
 
-Every module that used to call psycopg2.connect(user='radxa', port='5432',
+Every module that used to call psycopg2.connect(user='pi', port='5432',
 database='serial-gateway-program') directly now calls get_connection()
 from here instead. Connection details (host, port, user, password,
 database name) are read once from config.py (which in turn reads them
@@ -11,9 +11,9 @@ only ever requires editing pygw_conf.py, not hunting through the code.
 
 Backward compatible by default: if pygw_conf.py doesn't define any of the
 db_* settings (an older config file that predates this), get_connection()
-falls back to exactly what was hardcoded before (local socket, user
-'radxa', port 5432, database 'serial-gateway-program', no password) - see
-config.py for the defaults.
+falls back to exactly what was hardcoded in the monolithic gateway (local
+socket, user 'pi', port 5432, database 'serial-gateway-program', no
+password) - see config.py for the defaults.
 '''
 import psycopg2
 
