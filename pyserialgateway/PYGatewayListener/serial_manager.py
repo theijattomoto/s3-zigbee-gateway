@@ -41,10 +41,13 @@ class SerialObjectManager(serial.Serial):
     
     def force_close(self):
         try:
-            fcntl.flock(self.serial_obj.fileno(), fcntl.LOCK_UN | fcntl.LOCK_NB)
-        except:
+            if self.is_open:
+                fcntl.flock(self.fileno(), fcntl.LOCK_UN)
+        except (OSError, serial.SerialException):
             pass
-        self.close()
+        finally:
+            if self.is_open:
+                self.close()
             
     def gw_initial(self, final_ports_ind, final_ports_len):
         '''
@@ -155,4 +158,3 @@ class SerialObjectManager(serial.Serial):
                     except:
                         pass
         return (self.status, self.final_gateway_name, data, ind)
-
