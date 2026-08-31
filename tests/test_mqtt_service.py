@@ -1,0 +1,162 @@
+import json
+import os
+import tempfile
+import unittest
+
+from pyserialgateway.mqtt_service.adapters import (
+    LegacyGatewayMQTTAdapter,
+    RefactoredGatewayMQTTAdapter,
+)
+from pyserialgateway.mqtt_service.config import MQTTConfig
+from pyserialgateway.mqtt_service.events import GatewayEvent
+from pyserialgateway.mqtt_service.service import MQTTService
+from pyserialgateway.mqtt_service.topics import MQTTTopics
+
+
+class FakeResult:
+    rc = 0
+
+
+class FakeClient:
+    def __init__(self):
+        self.on_connect = None
+        self.on_disconnect = None
+        self.on_message = None
+        self.published = []
+        self.subscriptions = []
+        self.will = None
+
+    def username_pw_set(self, username, password=None):
+        self.username = username
+        self.password = password
+
+    def tls_set(self, **kwargs):
+        self.tls_kwargs = kwargs
+
+    def tls_insecure_set(self, value):
+        self.tls_insecure = value
+
+    def will_set(self, topic, payload, qos=0, retain=False):
+        self.will = (topic, payload, qos, retain)
+
+    def connect(self, broker, port, keepalive):
+        self.connection = (broker, port, keepalive)
+        return 0
+
+    def loop_start(self):
+        return None
+
+    def loop_stop(self):
+        return None
+
+    def disconnect(self):
+        return None
+
+    def subscribe(self, topic, qos=0):
+        self.subscriptions.append((topic, qos))
+
+    def publish(self, topic, payload, qos=0, retain=False):
+        self.published.append((topic, payload, qos, retain))
+        return FakeResult()
+
+
+class MQTTServiceTests(unittest.TestCase):
+    def make_service(self):
+        temp = tempfile.NamedTemporaryFile(suffix=".mqtt.db", delete=False)
+        temp.close()
+        self.addCleanup(lambda: os.path.exists(temp.name) and os.unlink(temp.name))
+        config = MQTTConfig(
+            enabled=True,
+            broker="broker.local",
+            port=1883,
+            username="user",
+            password="secret",
+            tls=False,
+            gateway_id="gw-01",
+            topic_root="s3/zigbee",
+            buffer_db=temp.name,
+        )
+        fake = FakeClient()
+        return MQTTService(config=config, client=fake), fake
+
+    def test_topics_are_gateway_scoped(self):
+        topics = MQTTTopics("s3/zigbee", "gw-01")
+        self.assertEqual(topics.status(), "s3/zigbee/gw-01/status")
+        self.assertEqual(topics.telemetry("001A"), "s3/zigbee/gw-01/telemetry/001A")
+        self.assertEqual(topics.command(), "s3/zigbee/gw-01/cmd")
+        self.assertEqual(topics.node_command(), "s3/zigbee/gw-01/node/+/cmd")
+
+    def test_legacy_and_refactored_adapters_emit_same_event(self):
+        class RecordingService:
+            def __init__(self):
+                self.events = []
+            def publish_event(self, event):
+                self.events.append(event)
+
+        legacy_service = RecordingService()
+        ref_service = RecordingService()
+        legacy = LegacyGatewayMQTTAdapter(legacy_service, "gw-01")
+        refactored = RefactoredGatewayMQTTAdapter(ref_service, "gw-01")
+
+        legacy.publish_validated_packet("001A", "H1|001A|...", "H1")
+        refactored.publish_validated_packet("001A", "H1|001A|...", "H1")
+
+        self.assertEqual(legacy_service.events[0], ref_service.events[0])
+
+    def test_live_telemetry_is_not_buffered_when_disconnected(self):
+        service, _ = self.make_service()
+        event = GatewayEvent(
+            event_type="heartbeat",
+            gateway_id="gw-01",
+            node_id="001A",
+            packet_type="H1",
+            payload="H1|001A|...",
+        )
+        service.publish_event(event)
+        topic, payload, qos, retain, live_only = service.publish_queue.get_nowait()
+        self.assertTrue(live_only)
+        self.assertEqual(qos, 0)
+        self.assertIn('"packet_type":"H1"', payload)
+
+    def test_fault_event_is_replayable_qos1(self):
+        service, _ = self.make_service()
+        event = GatewayEvent(
+            event_type="fault",
+            gateway_id="gw-01",
+            node_id="001A",
+            packet_type="E2",
+            payload="E2|001A|...",
+        )
+        service.publish_event(event)
+        topic, payload, qos, retain, live_only = service.publish_queue.get_nowait()
+        self.assertFalse(live_only)
+        self.assertEqual(qos, 1)
+        self.assertEqual(topic, "s3/zigbee/gw-01/event/001A")
+
+    def test_connect_subscribes_and_publishes_online_status(self):
+        service, client = self.make_service()
+        service._on_connect(client, None, None, 0)
+        self.assertIn(("s3/zigbee/gw-01/cmd", 1), client.subscriptions)
+        self.assertIn(("s3/zigbee/gw-01/node/+/cmd", 1), client.subscriptions)
+        topic, raw, qos, retain = client.published[0]
+        self.assertEqual(topic, "s3/zigbee/gw-01/status")
+        self.assertEqual(json.loads(raw)["status"], "online")
+        self.assertEqual(qos, 1)
+        self.assertTrue(retain)
+
+    def test_command_callback_is_transport_agnostic(self):
+        service, client = self.make_service()
+        received = []
+        service.set_command_handler(received.append)
+
+        class Msg:
+            topic = "s3/zigbee/gw-01/cmd"
+            payload = b'{"request_id":"r1","command":"poll"}'
+
+        service._on_message(client, None, Msg())
+        self.assertEqual(received[0]["command"], "poll")
+        self.assertEqual(received[0]["source_topic"], Msg.topic)
+
+
+if __name__ == "__main__":
+    unittest.main()
