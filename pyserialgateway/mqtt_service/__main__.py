@@ -6,6 +6,7 @@ import signal
 import sys
 import time
 
+from .adapters import RefactoredGatewayMQTTAdapter
 from .config import MQTTConfig
 from .events import GatewayEvent
 from .service import MQTTService
@@ -25,6 +26,16 @@ def build_parser():
         "--publish-test",
         action="store_true",
         help="Publish one non-retained gateway smoke-test event after connecting.",
+    )
+    parser.add_argument(
+        "--publish-node-test",
+        action="store_true",
+        help="Publish one synthetic validated H1 node packet through the refactored adapter.",
+    )
+    parser.add_argument(
+        "--node-id",
+        default="001A",
+        help="Synthetic node ID used with --publish-node-test (default: 001A).",
     )
     parser.add_argument(
         "--stay-alive",
@@ -89,6 +100,26 @@ def main(argv=None):
             )
             service.publish_queue.join()
             print(f"MQTT TEST EVENT QUEUED topic={service.topics.event('gateway')}")
+
+        if args.publish_node_test:
+            adapter = RefactoredGatewayMQTTAdapter(
+                service=service,
+                gateway_id=config.gateway_id,
+            )
+            synthetic_packet = (
+                f"#H1|{args.node_id}|0001|01-00:00:00|synthetic_mqtt_validation#"
+            ).encode("utf-8")
+            adapter.publish_validated_packet(
+                node_id=args.node_id,
+                node_data=synthetic_packet,
+                packet_type="H1",
+                event_type="node_packet",
+            )
+            service.publish_queue.join()
+            print(
+                "MQTT NODE TEST EVENT QUEUED "
+                f"node_id={args.node_id} topic={service.topics.for_event('node_packet', args.node_id)}"
+            )
 
         if args.stay_alive:
             print("MQTT service is running. Press Ctrl-C to stop cleanly.")
