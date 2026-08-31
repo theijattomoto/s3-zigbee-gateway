@@ -75,7 +75,9 @@ class MQTTServiceTests(unittest.TestCase):
     def make_service(self):
         temp = tempfile.NamedTemporaryFile(suffix=".mqtt.db", delete=False)
         temp.close()
+        log_file = temp.name + ".log"
         self.addCleanup(lambda: os.path.exists(temp.name) and os.unlink(temp.name))
+        self.addCleanup(lambda: os.path.exists(log_file) and os.unlink(log_file))
         config = MQTTConfig(
             enabled=True,
             broker="broker.local",
@@ -86,6 +88,7 @@ class MQTTServiceTests(unittest.TestCase):
             gateway_id="gw-01",
             topic_root="s3/zigbee",
             buffer_db=temp.name,
+            log_file=log_file,
         )
         fake = FakeClient()
         return MQTTService(config=config, client=fake), fake
