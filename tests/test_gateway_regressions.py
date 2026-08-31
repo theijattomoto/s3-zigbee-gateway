@@ -221,6 +221,28 @@ class ResetThreadRegressionTests(unittest.TestCase):
         self.assertEqual(rest_queue.task_done_calls, 1)
 
 
+class DatabaseSchemaRegressionTests(unittest.TestCase):
+    def test_node_database_queries_do_not_depend_on_physical_column_order(self):
+        source = (
+            GATEWAY_PACKAGE / "database_aligner.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn(
+            "select * from node_database",
+            source.lower(),
+        )
+
+        expected_columns = (
+            "select pole_node, node, pan_id, channel, "
+            "latitude, longitude, description from node_database"
+        )
+
+        self.assertGreaterEqual(
+            source.lower().count(expected_columns),
+            3,
+        )
+
+
 class NoSerialStartupRegressionTests(unittest.TestCase):
     def test_no_serial_port_exits_before_listener_loop(self):
         source = (GATEWAY_PACKAGE / "main.py").read_text(encoding="utf-8")

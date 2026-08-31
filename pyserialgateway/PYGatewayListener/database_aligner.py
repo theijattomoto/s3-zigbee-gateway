@@ -76,7 +76,7 @@ class DatabaseAligner():
             connection = get_connection()
             connection.set_session(autocommit=True)
             cursor = connection.cursor()
-            query = '''select * from node_database where node = %s'''
+            query = '''select pole_node, node, pan_id, channel, latitude, longitude, description from node_database where node = %s'''
             cursor.execute(query, (data[select_ind],))
             record = cursor.fetchall()
             if len(record) == 0:
@@ -133,7 +133,7 @@ class DatabaseAligner():
             empty_nodelist = []
             connection = get_connection()
             cursor = connection.cursor()
-            query = '''select * from node_database'''
+            query = '''select pole_node, node, pan_id, channel, latitude, longitude, description from node_database'''
             cursor.execute(query)
             all_records = cursor.fetchall()
             entries = cursor.rowcount
@@ -162,7 +162,7 @@ class DatabaseAligner():
             sorted_nodelist = {}
             connection = get_connection()
             cursor = connection.cursor()
-            query = '''select * from node_database where pan_id = %s and channel = %s'''
+            query = '''select pole_node, node, pan_id, channel, latitude, longitude, description from node_database where pan_id = %s and channel = %s'''
             cursor.execute(query, (port_data[1], port_data[2]))
             all_records = cursor.fetchall()
             for row in all_records:
