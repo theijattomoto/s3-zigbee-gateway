@@ -7,16 +7,18 @@ Command-line options are intentionally not parsed in this module. The launcher
 module imports free from argparse side effects and allows the factorized
 modules to be imported by tests and other Python code.
 
-The remaining settings are loaded from pygw_conf.py and the encrypted
-rest_location/auth_key/cert bundle, preserving the existing runtime behavior.
+The remaining settings are loaded from PYSerialGateway/pygw_conf.py and the
+encrypted rest_location/auth_key/cert bundle, preserving the existing runtime
+behavior. The packaged config_PYproperties.py remains only as a fallback for
+installations that do not provide the launcher-side configuration file.
 '''
 import sys, os
 import zipfile
 import cryptography.fernet as fcrypto
 import psutil
 try:
-    import pygw_conf
-except:
+    from PYSerialGateway import pygw_conf
+except ImportError:
     import pyserialgateway.config_PYproperties as pygw_conf
 import pyserialgateway
 
