@@ -113,7 +113,14 @@ class MQTTServiceTests(unittest.TestCase):
         legacy.publish_validated_packet("001A", "H1|001A|...", "H1")
         refactored.publish_validated_packet("001A", "H1|001A|...", "H1")
 
-        self.assertEqual(legacy_service.events[0], ref_service.events[0])
+        legacy_event = legacy_service.events[0].to_dict()
+        ref_event = ref_service.events[0].to_dict()
+        legacy_event.pop("timestamp")
+        ref_event.pop("timestamp")
+
+        self.assertEqual(legacy_event, ref_event)
+        self.assertTrue(legacy_service.events[0].timestamp)
+        self.assertTrue(ref_service.events[0].timestamp)
 
     def test_live_telemetry_is_not_buffered_when_disconnected(self):
         service, _ = self.make_service()
