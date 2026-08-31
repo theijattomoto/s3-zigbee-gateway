@@ -33,6 +33,7 @@ from .record_thread import MainRecordThread
 from .reset_thread import MainResetThread
 from .polling_thread import MainPollingThread
 from .main_listener_thread import MainListenerThread
+from ..mqtt_service.mirroring import start_mqtt_mirroring, stop_mqtt_mirroring
 
 def main(*args):
     '''
@@ -121,6 +122,14 @@ def main(*args):
     my_logger_problem.addHandler(problem_fh)
     kmllogfilename = '_'.join(str(it) for it in datein) + '_' + MQTT_client_ID + '_GPSscan.kml'
     kmlpathname = maplogpath+'/'+kmllogfilename
+
+    # MQTT is an independent gateway transport. Start it before probing Zigbee
+    # serial so broker status/reconnect remains alive while hardware is absent.
+    mqtt_started = start_mqtt_mirroring()
+    if mqtt_started:
+        my_logger.info('MQTT transport started independently of Zigbee serial.')
+    else:
+        my_logger.warning('MQTT transport is disabled or failed to start.')
     
     
     '''
@@ -175,21 +184,47 @@ def main(*args):
                 options_status_dict[flag] = True
     except:
         pass
+
+    if not port_status:
+        my_logger.warning(
+            'No Zigbee gateway serial port detected. MQTT remains active; waiting for Zigbee gateway.'
+        )
+        retry_interval = max(1.0, float(os.getenv('ZIGBEE_SERIAL_RETRY_SECONDS', '5')))
+        last_wait_log = 0.0
+        try:
+            while not port_status:
+                now = time.monotonic()
+                if now - last_wait_log >= 30.0:
+                    my_logger.info(
+                        'Waiting for Zigbee gateway serial port; retrying every %.1fs.',
+                        retry_interval,
+                    )
+                    last_wait_log = now
+                time.sleep(retry_interval)
+                port_status, port_name, port_data, port_index = SerialProcessObject.ini_run(
+                    my_logger,
+                    my_logger_simple,
+                    my_logger_problem,
+                    1,
+                    [first_GW_data, second_GW_data],
+                    None,
+                )
+        except KeyboardInterrupt:
+            my_logger.info('Gateway shutdown requested while waiting for Zigbee serial.')
+            if mqtt_started:
+                stop_mqtt_mirroring()
+            return
+        my_logger.info('Zigbee gateway serial port detected: %s', port_name)
     
     node_database_list = DBAligner.run(my_logger, my_logger_simple, my_logger_problem, port_data, [first_GW_data, second_GW_data], options_status_dict['DBUP'])
     if node_database_list == []:
         error_string = 'DBUP - PostgreSQL database has no target nodes, deactivating code.'
         my_logger.debug(error_string)
         my_logger_problem.error(error_string)
-    if not port_status:
-        my_logger.warning(
-            'No Zigbee gateway serial port detected. Gateway listener exiting.'
-        )
-        return
 
     '''
     [Starting up all Main-type threads, each with distinctive functions]
-    # If no USB ports are found during startup, no threads will succeed and the script will exit.
+    # If no USB ports are found during startup, MQTT remains active and serial discovery retries until the gateway appears.
     # If startup argument has 'NOPOLL', only the MainPollingThread is disabled. All other functions will be alive, and SerialPort occupied.
     # If startup argument has 'GPSUP', MainPollingThread will double poll for GPS data at a specific time, which will then be used by the KMLMapper object.
     # If startup argument has 'NOSELMOS', any updated packet data will not be uploaded to SELMOS. Only to be used in gateway in which its configuration has not been set up properly to not affect big data.
@@ -574,6 +609,8 @@ def main(*args):
         for threads in listener_threads:
             threads.stop()
             threads.join()
+        if mqtt_started:
+            stop_mqtt_mirroring()
         my_logger.debug('All threading processes stopped.')
         my_logger_simple.debug('All threading processes stopped.')
     
