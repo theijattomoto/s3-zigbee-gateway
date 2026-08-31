@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from pyserialgateway.mqtt_service.adapters import (
     LegacyGatewayMQTTAdapter,
@@ -9,6 +10,7 @@ from pyserialgateway.mqtt_service.adapters import (
 )
 from pyserialgateway.mqtt_service.config import MQTTConfig
 from pyserialgateway.mqtt_service.events import GatewayEvent
+from pyserialgateway.mqtt_service.mirroring import MQTTMirroringQueue
 from pyserialgateway.mqtt_service.service import MQTTService
 from pyserialgateway.mqtt_service.topics import MQTTTopics
 
@@ -60,6 +62,15 @@ class FakeClient:
         return FakeResult()
 
 
+class FakeQueue:
+    def __init__(self):
+        self.items = []
+
+    def put(self, item, *args, **kwargs):
+        self.items.append((item, args, kwargs))
+        return "http-queue-result"
+
+
 class MQTTServiceTests(unittest.TestCase):
     def make_service(self):
         temp = tempfile.NamedTemporaryFile(suffix=".mqtt.db", delete=False)
@@ -90,6 +101,7 @@ class MQTTServiceTests(unittest.TestCase):
         class RecordingService:
             def __init__(self):
                 self.events = []
+
             def publish_event(self, event):
                 self.events.append(event)
 
@@ -156,6 +168,38 @@ class MQTTServiceTests(unittest.TestCase):
         service._on_message(client, None, Msg())
         self.assertEqual(received[0]["command"], "poll")
         self.assertEqual(received[0]["source_topic"], Msg.topic)
+
+    def test_mirroring_queue_preserves_http_queue_and_mirrors_packet(self):
+        http_queue = FakeQueue()
+        queue = MQTTMirroringQueue(http_queue, packet_type="H1")
+        item = ("001A", b"#H1|001A|...", 0)
+
+        with patch(
+            "pyserialgateway.mqtt_service.mirroring.mirror_validated_packet"
+        ) as mirror:
+            result = queue.put(item, True, timeout=0.25)
+
+        self.assertEqual(result, "http-queue-result")
+        self.assertEqual(http_queue.items, [(item, (True,), {"timeout": 0.25})])
+        mirror.assert_called_once_with(
+            node_id="001A",
+            node_data=b"#H1|001A|...",
+            packet_type="H1",
+        )
+
+    def test_mirroring_failure_does_not_break_http_queue(self):
+        http_queue = FakeQueue()
+        queue = MQTTMirroringQueue(http_queue, packet_type="E2")
+        item = ("00FF", b"#E2|00FF|...", 0)
+
+        with patch(
+            "pyserialgateway.mqtt_service.mirroring.mirror_validated_packet",
+            side_effect=RuntimeError("mqtt unavailable"),
+        ):
+            result = queue.put(item)
+
+        self.assertEqual(result, "http-queue-result")
+        self.assertEqual(http_queue.items[0][0], item)
 
 
 if __name__ == "__main__":
