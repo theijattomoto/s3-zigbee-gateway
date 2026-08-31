@@ -150,6 +150,24 @@ class MainListenerPacketTests(unittest.TestCase):
         self.assertEqual(filtered, b"#E2|00AA|payload#\r\n")
 
 
+class NoSerialStartupRegressionTests(unittest.TestCase):
+    def test_no_serial_port_exits_before_listener_loop(self):
+        source = (GATEWAY_PACKAGE / "main.py").read_text(encoding="utf-8")
+
+        guard = source.index("if not port_status:")
+        exit_message = source.index(
+            "No Zigbee gateway serial port detected. Gateway listener exiting."
+        )
+        listener_start = source.index(
+            "spec_string = '[START] PYGATEWAY LISTENER @ '"
+        )
+        listener_loop = source.index("while True:", listener_start)
+
+        self.assertLess(guard, exit_message)
+        self.assertLess(exit_message, listener_start)
+        self.assertLess(listener_start, listener_loop)
+
+
 class ForcedPortSwitchRegressionTests(unittest.TestCase):
     def test_previous_port_is_compared_before_last_index_is_cleared(self):
         source = (GATEWAY_PACKAGE / "main.py").read_text(encoding="utf-8")

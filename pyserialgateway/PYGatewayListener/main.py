@@ -283,6 +283,12 @@ def main(*args):
     '''
     [Start of Main Listener loop]
     '''
+    if not port_status:
+        my_logger.warning(
+            'No Zigbee gateway serial port detected. Gateway listener exiting.'
+        )
+        return
+
     try:
         spec_string = '[START] PYGATEWAY LISTENER @ ' + time.strftime('%d-%m-%Y %H:%M:%S', time.localtime())
         my_logger.info(spec_string)
