@@ -70,6 +70,42 @@ class MQTTService:
         )
         self._configure_client()
 
+    def _gateway_status_payload(self, status: str) -> str:
+        return json.dumps(
+            {
+                "status": status,
+                "gateway_id": self.config.gateway_id,
+                "gateway_type": "s3_zigbee",
+            },
+            separators=(",", ":"),
+        )
+
+    def _publish_gateway_status(self, status: str) -> bool:
+        """Publish and explicitly log retained main-server gateway state."""
+        topic = self.topics.status()
+        success = self._publish_now(
+            topic,
+            self._gateway_status_payload(status),
+            qos=1,
+            retain=True,
+            log_success=False,
+        )
+        if success:
+            _LOG.info(
+                "MQTT gateway status published gateway_id=%s status=%s topic=%s qos=1 retain=True",
+                self.config.gateway_id,
+                status,
+                topic,
+            )
+        else:
+            _LOG.warning(
+                "MQTT gateway status publish failed gateway_id=%s status=%s topic=%s",
+                self.config.gateway_id,
+                status,
+                topic,
+            )
+        return success
+
     def _configure_client(self) -> None:
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
@@ -88,15 +124,12 @@ class MQTTService:
             )
             self.client.tls_insecure_set(self.config.tls_insecure)
 
-        offline = json.dumps(
-            {
-                "status": "offline",
-                "gateway_id": self.config.gateway_id,
-                "gateway_type": "s3_zigbee",
-            },
-            separators=(",", ":"),
+        self.client.will_set(
+            self.topics.status(),
+            self._gateway_status_payload("offline"),
+            qos=1,
+            retain=True,
         )
-        self.client.will_set(self.topics.status(), offline, qos=1, retain=True)
 
     def set_command_handler(self, handler: Callable[[dict], None]) -> None:
         self.command_handler = handler
@@ -131,19 +164,7 @@ class MQTTService:
             return
         try:
             if self.connected.is_set():
-                self._publish_now(
-                    self.topics.status(),
-                    json.dumps(
-                        {
-                            "status": "offline",
-                            "gateway_id": self.config.gateway_id,
-                            "gateway_type": "s3_zigbee",
-                        },
-                        separators=(",", ":"),
-                    ),
-                    qos=1,
-                    retain=True,
-                )
+                self._publish_gateway_status("offline")
             self.client.disconnect()
             self.client.loop_stop()
         finally:
@@ -192,7 +213,7 @@ class MQTTService:
         while not self.stopping.is_set() and not self.connected.is_set():
             try:
                 _LOG.info(
-                    "MQTT connecting broker=%s:%s keepalive=%s",
+                    "MQTT connection attempt broker=%s:%s keepalive=%s",
                     self.config.broker,
                     self.config.port,
                     self.config.keepalive,
@@ -206,50 +227,63 @@ class MQTTService:
                 if self.connected.wait(timeout=5):
                     return
             except Exception as exc:
-                _LOG.warning("MQTT connection failed: %s", exc)
-            _LOG.info("MQTT reconnect retry in %ss", delay)
+                _LOG.warning(
+                    "MQTT connection attempt failed broker=%s:%s error=%s",
+                    self.config.broker,
+                    self.config.port,
+                    exc,
+                )
+            _LOG.info("MQTT reconnect retry scheduled delay=%ss", delay)
             self.stopping.wait(delay)
             delay = min(delay * 2, 60)
 
     def _on_connect(self, client, userdata, flags, rc, *args) -> None:
         if rc != 0:
-            _LOG.error("MQTT connect rejected rc=%s", rc)
+            _LOG.error("MQTT connection rejected rc=%s", rc)
             return
 
         client.subscribe(self.topics.command(), qos=1)
         client.subscribe(self.topics.node_command(), qos=1)
         _LOG.info(
-            "MQTT connected gateway_id=%s command_topic=%s node_command_topic=%s",
+            "MQTT broker connected gateway_id=%s broker=%s:%s command_topic=%s node_command_topic=%s",
             self.config.gateway_id,
+            self.config.broker,
+            self.config.port,
             self.topics.command(),
             self.topics.node_command(),
         )
 
         # Publish retained online status before allowing queued gateway events to flow.
-        # This keeps broker-visible lifecycle ordering deterministic: online -> events.
-        if not self._publish_now(
-            self.topics.status(),
-            json.dumps(
-                {
-                    "status": "online",
-                    "gateway_id": self.config.gateway_id,
-                    "gateway_type": "s3_zigbee",
-                },
-                separators=(",", ":"),
-            ),
-            qos=1,
-            retain=True,
-        ):
-            _LOG.warning("MQTT online status publish failed; connection remains not ready")
+        if not self._publish_gateway_status("online"):
+            _LOG.warning("MQTT connection not marked ready because online status update failed")
             return
 
         self.connected.set()
+        _LOG.info("MQTT transport ready gateway_id=%s", self.config.gateway_id)
         self._replay_buffer()
 
     def _on_disconnect(self, client, userdata, rc, *args) -> None:
         self.connected.clear()
-        _LOG.warning("MQTT disconnected rc=%s", rc)
+        try:
+            rc_value = int(rc)
+        except (TypeError, ValueError):
+            rc_value = rc
+
+        if rc_value == 0:
+            _LOG.info(
+                "MQTT disconnected cleanly gateway_id=%s rc=%s",
+                self.config.gateway_id,
+                rc,
+            )
+        else:
+            _LOG.warning(
+                "MQTT disconnected unexpectedly gateway_id=%s rc=%s",
+                self.config.gateway_id,
+                rc,
+            )
+
         if not self.stopping.is_set():
+            _LOG.info("MQTT reconnect requested gateway_id=%s", self.config.gateway_id)
             threading.Thread(
                 target=self._connect_with_backoff,
                 name="S3MQTTReconnect",
@@ -296,18 +330,25 @@ class MQTTService:
             finally:
                 self.publish_queue.task_done()
 
-    def _publish_now(self, topic: str, payload: str, qos: int, retain: bool) -> bool:
+    def _publish_now(
+        self,
+        topic: str,
+        payload: str,
+        qos: int,
+        retain: bool,
+        log_success: bool = True,
+    ) -> bool:
         try:
             result = self.client.publish(topic, payload, qos=qos, retain=retain)
             success = result.rc == mqtt.MQTT_ERR_SUCCESS
-            if success:
+            if success and log_success:
                 _LOG.info(
                     "MQTT published topic=%s qos=%s retain=%s",
                     topic,
                     qos,
                     retain,
                 )
-            else:
+            elif not success:
                 _LOG.warning("MQTT publish returned rc=%s topic=%s", result.rc, topic)
             return success
         except Exception as exc:
