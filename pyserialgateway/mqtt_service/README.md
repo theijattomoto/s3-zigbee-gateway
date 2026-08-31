@@ -8,6 +8,59 @@ This package is intentionally independent from both gateway implementations:
 It must not import serial, PostgreSQL, REST, recovery, polling, or listener modules.
 Both implementations integrate through the same adapter contract.
 
+## Bring MQTT up standalone first
+
+Before wiring MQTT into either gateway implementation, validate the transport by
+running it on its own from the repository root.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp .env.example .env
+```
+
+Export the deployment values from `.env` into the current shell, or set them
+with your service manager. The required minimum is:
+
+```bash
+export MQTT_ENABLED=true
+export MQTT_BROKER='<broker-host-or-ip>'
+export MQTT_PORT=8883
+export MQTT_USERNAME='<username>'
+export MQTT_PASSWORD='<password>'
+export MQTT_TLS=true
+export MQTT_CA_CERT='/path/to/broker-ca.crt'
+export MQTT_TLS_INSECURE=false
+export MQTT_TOPIC_ROOT='s3/zigbee'
+export GATEWAY_ID='<unique-s3-gateway-id>'
+```
+
+Run a connection-only check:
+
+```bash
+python -m pyserialgateway.mqtt_service --timeout 15
+```
+
+Run a connection check and publish one synthetic event:
+
+```bash
+python -m pyserialgateway.mqtt_service --timeout 15 --publish-test
+```
+
+Keep the client online so command subscriptions and LWT behavior can be tested:
+
+```bash
+python -m pyserialgateway.mqtt_service --timeout 15 --publish-test --stay-alive
+```
+
+A successful connection prints `MQTT CONNECTED` and publishes retained `online`
+state on `s3/zigbee/<gateway-id>/status`. A clean shutdown publishes retained
+`offline` state. An unclean process/network failure should cause the broker to
+publish the configured offline LWT.
+
+Do not start gateway integration until this standalone smoke test passes.
+
 ## Runtime contract
 
 ```python
