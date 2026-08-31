@@ -8,13 +8,14 @@ import threading
 
 from .config import msgID, msgID_vers, max_msgID_count
 from .db_connection import get_connection
+from ..mqtt_service.mirroring import MQTTMirroringQueue
 
 class DatabaseThread(threading.Thread):
     def __init__(self, packet_logger, problem_logger, msg_queue, node_ID_list, node_ID_datalist, ack, dtime_list, message_ID_list, override_flag_list, lamp_status_list):
         super(DatabaseThread, self).__init__()
         self.packet_logger = packet_logger
         self.problem_logger = problem_logger
-        self.msg_queue = msg_queue
+        self.msg_queue = MQTTMirroringQueue(msg_queue, packet_type=ack)
         self.dtime_stamp_list = dtime_list
         self.ack = ack
         self.node_ID_list = node_ID_list
@@ -108,7 +109,6 @@ class DatabaseThread(threading.Thread):
                                 tuple_data = (self.dtime_stamp_list[p], self.message_ID_list[p], msg_ID_pg, new_dec_count, self.node_ID_list[p], self.ack)
                                 self.postgres_update(tuple_data, query)
                                 self.msg_queue.put((self.node_ID_list[p], self.node_ID_datalist[p], 0))
-                                # increment dec_count, overwrite data entry in DB, record fault as oo_msgid
                             else:
                                 flag = self.postgres_timecheck(dtime_pg, self.dtime_stamp_list[p])
                                 if flag[0] == -1:
@@ -131,13 +131,11 @@ class DatabaseThread(threading.Thread):
                                         tuple_data = (self.dtime_stamp_list[p], self.message_ID_list[p], new_ro_count, ms_count, self.override_flag_list[p], self.lamp_status_list[p], self.node_ID_list[p], self.ack)
                                         self.postgres_update(tuple_data, query)
                                         self.msg_queue.put((self.node_ID_list[p], self.node_ID_datalist[p], 0))
-                                        # upload dtime, msgid; increment rollover_count and update miss_count
                                     else:
                                         query = '''update filter_time_py set dtime = %s, msgid = %s, rollover_count = %s, override_flag = %s, lamp_status = %s where node = %s and ack = %s'''
                                         tuple_data = (self.dtime_stamp_list[p], self.message_ID_list[p], new_ro_count, self.override_flag_list[p], self.lamp_status_list[p], self.node_ID_list[p], self.ack)
                                         self.postgres_update(tuple_data, query)
                                         self.msg_queue.put((self.node_ID_list[p], self.node_ID_datalist[p], 0))
-                                        # upload dtime, msgid and increment rollover_count
                                 else:
                                     if flag[1] == -1:
                                         continue
@@ -154,7 +152,6 @@ class DatabaseThread(threading.Thread):
                                     tuple_data = (self.dtime_stamp_list[p], self.message_ID_list[p], msg_ID_pg, new_dec_count, self.node_ID_list[p], self.ack)
                                     self.postgres_update(tuple_data, query)
                                     self.msg_queue.put((self.node_ID_list[p], self.node_ID_datalist[p], 0))
-                                    # increment dec_count, overwrite data entry in DB, record fault as oo_msgid
                         elif entry_diff == 0:
                             continue
                         elif entry_diff > 0:
@@ -175,7 +172,6 @@ class DatabaseThread(threading.Thread):
                                 tuple_data = (self.dtime_stamp_list[p], self.message_ID_list[p], self.override_flag_list[p], self.lamp_status_list[p], self.node_ID_list[p], self.ack)
                                 self.postgres_update(tuple_data, query)
                                 self.msg_queue.put((self.node_ID_list[p], self.node_ID_datalist[p], 0))
-                                # upload dtime, msgid
                             else:
                                 if flag[1] == -1:
                                     continue
@@ -192,7 +188,6 @@ class DatabaseThread(threading.Thread):
                                 tuple_data = (self.dtime_stamp_list[p], self.message_ID_list[p], msg_ID_pg, new_dec_count, self.node_ID_list[p], self.ack)
                                 self.postgres_update(tuple_data, query)
                                 self.msg_queue.put((self.node_ID_list[p], self.node_ID_datalist[p], 0))
-                                # increment dec_count, overwrite data entry in DB, record fault as oo_msgid
                     else:
                         dtime_pg = row[0]
                         flag = self.postgres_timecheck(dtime_pg, self.dtime_stamp_list[p])
