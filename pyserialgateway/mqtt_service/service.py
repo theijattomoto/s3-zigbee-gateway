@@ -215,7 +215,7 @@ class MQTTService:
         if rc != 0:
             _LOG.error("MQTT connect rejected rc=%s", rc)
             return
-        self.connected.set()
+
         client.subscribe(self.topics.command(), qos=1)
         client.subscribe(self.topics.node_command(), qos=1)
         _LOG.info(
@@ -224,7 +224,10 @@ class MQTTService:
             self.topics.command(),
             self.topics.node_command(),
         )
-        self._publish_now(
+
+        # Publish retained online status before allowing queued gateway events to flow.
+        # This keeps broker-visible lifecycle ordering deterministic: online -> events.
+        if not self._publish_now(
             self.topics.status(),
             json.dumps(
                 {
@@ -236,7 +239,11 @@ class MQTTService:
             ),
             qos=1,
             retain=True,
-        )
+        ):
+            _LOG.warning("MQTT online status publish failed; connection remains not ready")
+            return
+
+        self.connected.set()
         self._replay_buffer()
 
     def _on_disconnect(self, client, userdata, rc, *args) -> None:
