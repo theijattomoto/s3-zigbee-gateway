@@ -5,6 +5,20 @@ from typing import Any, Callable, Optional
 from .events import GatewayEvent
 
 
+def _normalize_payload(value: Any) -> Any:
+    """Convert gateway byte payloads to JSON-friendly UTF-8 text.
+
+    Real PYGatewayListener packets are bytes. Decode them before they reach
+    json.dumps so MQTT payloads contain the packet text itself rather than a
+    Python representation such as ``b'...'``. Non-byte payloads are preserved.
+    """
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, bytearray):
+        return bytes(value).decode("utf-8", errors="replace")
+    return value
+
+
 class _BaseGatewayMQTTAdapter:
     def __init__(self, service, gateway_id: str, command_sink: Optional[Callable[[dict], None]] = None):
         self.service = service
@@ -31,7 +45,7 @@ class _BaseGatewayMQTTAdapter:
                 gateway_id=self.gateway_id,
                 node_id=str(node_id),
                 packet_type=packet_type,
-                payload=node_data,
+                payload=_normalize_payload(node_data),
             )
         )
 
