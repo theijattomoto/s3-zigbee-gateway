@@ -188,6 +188,26 @@ class MQTTServiceTests(unittest.TestCase):
         self.assertEqual(qos, 1)
         self.assertTrue(retain)
 
+    def test_every_successful_connect_republishes_gateway_online_status(self):
+        service, client = self.make_service()
+
+        service._on_connect(client, None, None, 0)
+        service.connected.clear()
+        service._on_connect(client, None, None, 0)
+
+        status_messages = [
+            item
+            for item in client.published
+            if item[0] == "s3/zigbee/gw-01/status"
+        ]
+        self.assertEqual(len(status_messages), 2)
+        for topic, raw, qos, retain in status_messages:
+            self.assertEqual(topic, "s3/zigbee/gw-01/status")
+            self.assertEqual(json.loads(raw)["status"], "online")
+            self.assertEqual(json.loads(raw)["gateway_id"], "gw-01")
+            self.assertEqual(qos, 1)
+            self.assertTrue(retain)
+
     def test_command_callback_is_transport_agnostic(self):
         service, client = self.make_service()
         received = []
