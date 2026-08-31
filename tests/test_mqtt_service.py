@@ -122,6 +122,28 @@ class MQTTServiceTests(unittest.TestCase):
         self.assertTrue(legacy_service.events[0].timestamp)
         self.assertTrue(ref_service.events[0].timestamp)
 
+    def test_adapter_decodes_byte_payload_to_utf8(self):
+        class RecordingService:
+            def __init__(self):
+                self.events = []
+
+            def publish_event(self, event):
+                self.events.append(event)
+
+        service = RecordingService()
+        adapter = RefactoredGatewayMQTTAdapter(service, "gw-01")
+        adapter.publish_validated_packet(
+            "001A",
+            b"#H1|001A|0001|01-00:00:00|synthetic#",
+            "H1",
+        )
+
+        self.assertEqual(
+            service.events[0].payload,
+            "#H1|001A|0001|01-00:00:00|synthetic#",
+        )
+        self.assertIsInstance(service.events[0].payload, str)
+
     def test_live_telemetry_is_not_buffered_when_disconnected(self):
         service, _ = self.make_service()
         event = GatewayEvent(
