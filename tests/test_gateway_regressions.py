@@ -150,6 +150,77 @@ class MainListenerPacketTests(unittest.TestCase):
         self.assertEqual(filtered, b"#E2|00AA|payload#\r\n")
 
 
+class ResetThreadRegressionTests(unittest.TestCase):
+    def test_failed_rest_command_returns_to_rest_queue_and_pauses(self):
+        module = load_module_from_path(
+            "gateway_reset_thread_under_test",
+            GATEWAY_PACKAGE / "reset_thread.py",
+        )
+
+        class FakeQueue:
+            def __init__(self, items=None):
+                self.items = list(items or [])
+                self.task_done_calls = 0
+
+            def qsize(self):
+                return len(self.items)
+
+            def get(self):
+                return self.items.pop(0)
+
+            def put(self, item):
+                self.items.append(item)
+
+            def task_done(self):
+                self.task_done_calls += 1
+
+        class FailingSerial:
+            def write(self, _msg):
+                raise OSError("serial write failed")
+
+            def fileno(self):
+                return 42
+
+            def close(self):
+                pass
+
+        reset_queue = FakeQueue()
+        rest_queue = FakeQueue([b"+TEST\r\n"])
+        reset_g0_queue = FakeQueue()
+        tt_queue = FakeQueue()
+
+        thread = module.MainResetThread(
+            mock.Mock(),
+            mock.Mock(),
+            reset_queue,
+            rest_queue,
+            reset_g0_queue,
+            tt_queue,
+            0,
+            0,
+            FailingSerial(),
+        )
+
+        worker = threading.Thread(target=thread.run)
+        worker.start()
+
+        deadline = time.time() + 1
+        while time.time() < deadline and not thread.pause_flag:
+            time.sleep(0.01)
+
+        thread.stop()
+        worker.join(timeout=1)
+
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(thread.pause_flag)
+
+        self.assertEqual(reset_queue.items, [])
+        self.assertEqual(reset_queue.task_done_calls, 0)
+
+        self.assertEqual(rest_queue.items, [b"+TEST\r\n"])
+        self.assertEqual(rest_queue.task_done_calls, 1)
+
+
 class NoSerialStartupRegressionTests(unittest.TestCase):
     def test_no_serial_port_exits_before_listener_loop(self):
         source = (GATEWAY_PACKAGE / "main.py").read_text(encoding="utf-8")

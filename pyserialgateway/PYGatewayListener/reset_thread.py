@@ -120,8 +120,8 @@ class MainResetThread(threading.Thread):
                         self.serial_obj.write(msg)
                         time.sleep(self.interval_sec)
                 except:
-                    self.reset_queue.task_done()
-                    self.reset_queue.put(msg)
+                    self.REST_controller_queue.task_done()
+                    self.REST_controller_queue.put(msg)
                     spec_string = 'Failed to send command ' + msg.decode('utf-8') + '.'
                     self.problem_logger.info(spec_string)
                     try:
