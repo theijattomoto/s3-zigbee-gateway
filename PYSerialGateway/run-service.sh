@@ -1,11 +1,12 @@
 #!/bin/bash
 
-echo "Start Sena SerialGateway"
+set -e
 
-# cd /home/SerialGateway
-# java -jar GatewaySerialListener-updated_200820_1920.jar &
-# sleep 10
+REPO_DIR="/home/pi/gateway-test/s3-zigbee-gateway"
+APP_DIR="$REPO_DIR/PYSerialGateway"
+PYTHON="$REPO_DIR/.venv/bin/python"
 
-cd /home/PYSerialGateway
-python3 pygw_main.py &
-# Add 'DBUP' to allow Excel-DB sync, Add 'GPSUP' to allow GPS polling at pre-set timeframe, Add 'NOPOLL' to disable active polling
+echo "Starting S3 Serial Gateway"
+
+cd "$APP_DIR"
+exec "$PYTHON" pygw_main.py "$@"

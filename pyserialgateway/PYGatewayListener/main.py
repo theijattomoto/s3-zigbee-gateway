@@ -181,6 +181,12 @@ def main(*args):
         error_string = 'DBUP - PostgreSQL database has no target nodes, deactivating code.'
         my_logger.debug(error_string)
         my_logger_problem.error(error_string)
+    if not port_status:
+        my_logger.warning(
+            'No Zigbee gateway serial port detected. Gateway listener exiting.'
+        )
+        return
+
     '''
     [Starting up all Main-type threads, each with distinctive functions]
     # If no USB ports are found during startup, no threads will succeed and the script will exit.
@@ -283,12 +289,6 @@ def main(*args):
     '''
     [Start of Main Listener loop]
     '''
-    if not port_status:
-        my_logger.warning(
-            'No Zigbee gateway serial port detected. Gateway listener exiting.'
-        )
-        return
-
     try:
         spec_string = '[START] PYGATEWAY LISTENER @ ' + time.strftime('%d-%m-%Y %H:%M:%S', time.localtime())
         my_logger.info(spec_string)
