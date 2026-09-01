@@ -53,6 +53,7 @@ class MQTTService:
     """Asynchronous MQTT transport with reconnect, buffering, LWT and commands."""
 
     LIVE_ONLY_TYPES = {"heartbeat", "telemetry", "node_packet"}
+    RAW_HEARTBEAT_TYPES = {"heartbeat", "node_packet"}
 
     def __init__(self, config: Optional[MQTTConfig] = None, client=None):
         self.config = config or MQTTConfig.from_env()
@@ -178,11 +179,31 @@ class MQTTService:
             self.connected.clear()
             _LOG.info("MQTT service stopped gateway_id=%s", self.config.gateway_id)
 
+    @staticmethod
+    def _raw_heartbeat_payload(value) -> str:
+        if isinstance(value, bytes):
+            text = value.decode("utf-8", errors="replace")
+        elif isinstance(value, bytearray):
+            text = bytes(value).decode("utf-8", errors="replace")
+        else:
+            text = str(value or "")
+
+        text = text.strip()
+        if text.startswith("#") and text.endswith("#") and len(text) >= 2:
+            text = text[1:-1].strip()
+        return text
+
     def publish_event(self, event: GatewayEvent) -> None:
         node_id = str(event.node_id or "gateway")
+        event_type = event.event_type.strip().lower()
         topic = self.topics.for_event(event.event_type, node_id)
-        payload = json.dumps(event.to_dict(), separators=(",", ":"), default=str)
-        live_only = event.event_type.strip().lower() in self.LIVE_ONLY_TYPES
+        live_only = event_type in self.LIVE_ONLY_TYPES
+
+        if event_type in self.RAW_HEARTBEAT_TYPES:
+            payload = self._raw_heartbeat_payload(event.payload)
+        else:
+            payload = json.dumps(event.to_dict(), separators=(",", ":"), default=str)
+
         qos = 0 if live_only else 1
         self.publish_queue.put((topic, payload, qos, False, live_only))
         _LOG.info(
