@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -72,7 +74,7 @@ class FakeQueue:
 
 
 class MQTTServiceTests(unittest.TestCase):
-    def make_service(self):
+    def make_service(self, status_interval_seconds=7200):
         temp = tempfile.NamedTemporaryFile(suffix=".mqtt.db", delete=False)
         temp.close()
         log_file = temp.name + ".log"
@@ -88,6 +90,7 @@ class MQTTServiceTests(unittest.TestCase):
             gateway_id="gw-01",
             topic_root="s3/zigbee",
             buffer_db=temp.name,
+            status_interval_seconds=status_interval_seconds,
             log_file=log_file,
         )
         fake = FakeClient()
@@ -207,6 +210,34 @@ class MQTTServiceTests(unittest.TestCase):
             self.assertEqual(json.loads(raw)["gateway_id"], "gw-01")
             self.assertEqual(qos, 1)
             self.assertTrue(retain)
+
+    def test_status_heartbeat_republishes_online_while_connected(self):
+        service, client = self.make_service(status_interval_seconds=1)
+        service.connected.set()
+        worker = threading.Thread(target=service._status_heartbeat_worker, daemon=True)
+        worker.start()
+        time.sleep(1.2)
+        service.stopping.set()
+        worker.join(timeout=1)
+
+        status_messages = [
+            item for item in client.published if item[0] == "s3/zigbee/gw-01/status"
+        ]
+        self.assertGreaterEqual(len(status_messages), 1)
+        topic, raw, qos, retain = status_messages[-1]
+        self.assertEqual(topic, "s3/zigbee/gw-01/status")
+        self.assertEqual(json.loads(raw)["status"], "online")
+        self.assertEqual(qos, 1)
+        self.assertTrue(retain)
+
+    def test_status_heartbeat_skips_publish_while_disconnected(self):
+        service, client = self.make_service(status_interval_seconds=1)
+        worker = threading.Thread(target=service._status_heartbeat_worker, daemon=True)
+        worker.start()
+        time.sleep(1.2)
+        service.stopping.set()
+        worker.join(timeout=1)
+        self.assertEqual(client.published, [])
 
     def test_command_callback_is_transport_agnostic(self):
         service, client = self.make_service()
