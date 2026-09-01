@@ -160,13 +160,17 @@ class MQTTServiceTests(unittest.TestCase):
             gateway_id="gw-01",
             node_id="001A",
             packet_type="H1",
-            payload="H1|001A|...",
+            payload="#H1|001A|0001|01-00:00:00|synthetic#",
         )
         service.publish_event(event)
         topic, payload, qos, retain, live_only = service.publish_queue.get_nowait()
+        self.assertEqual(
+            topic,
+            "mainserver/node_zigbee/gw-01/snode/heartbeat/001A",
+        )
+        self.assertEqual(payload, "H1|001A|0001|01-00:00:00|synthetic")
         self.assertTrue(live_only)
         self.assertEqual(qos, 0)
-        self.assertIn('"packet_type":"H1"', payload)
 
     def test_fault_event_is_replayable_qos1(self):
         service, _ = self.make_service()
