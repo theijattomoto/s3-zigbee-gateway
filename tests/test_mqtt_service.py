@@ -235,8 +235,6 @@ class MQTTServiceTests(unittest.TestCase):
 
     def test_status_heartbeat_skips_publish_while_disconnected(self):
         service, client = self.make_service(status_interval_seconds=1)
-        worker = threading.Thread(target=self.make_service(status_interval_seconds=1)[0]._status_heartbeat_worker, daemon=True)
-        service.stopping.set()
         worker = threading.Thread(target=service._status_heartbeat_worker, daemon=True)
         worker.start()
         time.sleep(1.2)
