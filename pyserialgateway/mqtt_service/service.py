@@ -65,6 +65,7 @@ class MQTTService:
         self.command_handler: Optional[Callable[[dict], None]] = None
         self.worker_thread = None
         self.connect_thread = None
+        self.status_thread = None
         self.buffer = MQTTBuffer(
             self.config.buffer_db, self.config.buffer_retention_days
         )
@@ -157,6 +158,12 @@ class MQTTService:
             target=self._connect_with_backoff, name="S3MQTTConnect", daemon=True
         )
         self.connect_thread.start()
+        self.status_thread = threading.Thread(
+            target=self._status_heartbeat_worker,
+            name="S3MQTTStatus",
+            daemon=True,
+        )
+        self.status_thread.start()
 
     def stop(self) -> None:
         self.stopping.set()
@@ -236,6 +243,23 @@ class MQTTService:
             _LOG.info("MQTT reconnect retry scheduled delay=%ss", delay)
             self.stopping.wait(delay)
             delay = min(delay * 2, 60)
+
+    def _status_heartbeat_worker(self) -> None:
+        """Republish retained online state periodically while broker-connected."""
+        interval = self.config.status_interval_seconds
+        _LOG.info(
+            "MQTT gateway status heartbeat scheduled gateway_id=%s interval=%ss",
+            self.config.gateway_id,
+            interval,
+        )
+        while not self.stopping.wait(interval):
+            if not self.connected.is_set():
+                _LOG.info(
+                    "MQTT gateway status heartbeat skipped while disconnected gateway_id=%s",
+                    self.config.gateway_id,
+                )
+                continue
+            self._publish_gateway_status("online")
 
     def _on_connect(self, client, userdata, flags, rc, *args) -> None:
         if rc != 0:
