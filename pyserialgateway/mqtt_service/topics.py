@@ -15,7 +15,7 @@ class MQTTTopics:
         return f"{self._base()}/status"
 
     def telemetry(self, node_id: str) -> str:
-        return f"{self._base()}/telemetry/{node_id}"
+        return f"mainserver/node_zigbee/{self.gateway_id}/snode/heartbeat/{node_id}"
 
     def event(self, node_id: str) -> str:
         return f"{self._base()}/event/{node_id}"
