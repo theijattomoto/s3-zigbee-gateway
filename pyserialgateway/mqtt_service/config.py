@@ -27,6 +27,7 @@ class MQTTConfig:
     topic_root: str = "s3/zigbee"
     buffer_db: str = "mqtt_buffer.db"
     buffer_retention_days: int = 7
+    status_interval_seconds: int = 7200
     log_file: str = "log/mqtt.log"
     log_max_bytes: int = 5_000_000
     log_backup_count: int = 10
@@ -47,6 +48,7 @@ class MQTTConfig:
             topic_root=os.getenv("MQTT_TOPIC_ROOT", "s3/zigbee").strip("/"),
             buffer_db=os.getenv("MQTT_BUFFER_DB", "mqtt_buffer.db"),
             buffer_retention_days=int(os.getenv("MQTT_BUFFER_RETENTION_DAYS", "7")),
+            status_interval_seconds=int(os.getenv("MQTT_STATUS_INTERVAL_SECONDS", "7200")),
             log_file=os.getenv("MQTT_LOG_FILE", "log/mqtt.log"),
             log_max_bytes=int(os.getenv("MQTT_LOG_MAX_BYTES", "5000000")),
             log_backup_count=int(os.getenv("MQTT_LOG_BACKUP_COUNT", "10")),
@@ -61,6 +63,8 @@ class MQTTConfig:
             raise ValueError("GATEWAY_ID must not be empty")
         if self.tls and not self.ca_cert:
             raise ValueError("MQTT_CA_CERT is required when MQTT_TLS=true")
+        if self.status_interval_seconds <= 0:
+            raise ValueError("MQTT_STATUS_INTERVAL_SECONDS must be greater than zero")
         if not self.log_file:
             raise ValueError("MQTT_LOG_FILE must not be empty")
         if self.log_max_bytes <= 0:
