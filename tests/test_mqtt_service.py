@@ -99,7 +99,10 @@ class MQTTServiceTests(unittest.TestCase):
     def test_topics_are_gateway_scoped(self):
         topics = MQTTTopics("s3/zigbee", "gw-01")
         self.assertEqual(topics.status(), "s3/zigbee/gw-01/status")
-        self.assertEqual(topics.telemetry("001A"), "s3/zigbee/gw-01/telemetry/001A")
+        self.assertEqual(
+            topics.telemetry("001A"),
+            "mainserver/node_zigbee/gw-01/snode/heartbeat/001A",
+        )
         self.assertEqual(topics.command(), "s3/zigbee/gw-01/cmd")
         self.assertEqual(topics.node_command(), "s3/zigbee/gw-01/node/+/cmd")
 
@@ -232,6 +235,8 @@ class MQTTServiceTests(unittest.TestCase):
 
     def test_status_heartbeat_skips_publish_while_disconnected(self):
         service, client = self.make_service(status_interval_seconds=1)
+        worker = threading.Thread(target=self.make_service(status_interval_seconds=1)[0]._status_heartbeat_worker, daemon=True)
+        service.stopping.set()
         worker = threading.Thread(target=service._status_heartbeat_worker, daemon=True)
         worker.start()
         time.sleep(1.2)
