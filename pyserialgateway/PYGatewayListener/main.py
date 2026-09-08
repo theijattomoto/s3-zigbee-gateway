@@ -152,6 +152,7 @@ def main(*args):
     # node_database_list :- Main node list cross-checked by static database determined by DBAligner
     # options_status_dict (all flags are initially disabled)
     :- 'DBUP', enable function to auto-sync DB with Excel daily, or on every port switch
+    :- 'DBUP_ONLY', sync DB once from the operator CSV and exit before runtime threads start
     :- 'GPSUP', enable GPS mapping feature
     :- 'DEMOUP', disable all node recovery actions during runtime
     :- 'TESTUP', disable data sending to main server, only to test server(s) listed in configuration
@@ -171,6 +172,7 @@ def main(*args):
     RESTAPIObject.ini_run(my_logger, my_logger_simple, REST_controller_queue, msg_queue)
     options_status_dict = {
         'DBUP': False,
+        'DBUP_ONLY': False,
         'GPSUP': False,
         'DEMOUP': False,
         'TESTUP': False,
@@ -216,11 +218,18 @@ def main(*args):
             return
         my_logger.info('Zigbee gateway serial port detected: %s', port_name)
     
-    node_database_list = DBAligner.run(my_logger, my_logger_simple, my_logger_problem, port_data, [first_GW_data, second_GW_data], options_status_dict['DBUP'])
+    dbup_requested = options_status_dict['DBUP'] or options_status_dict['DBUP_ONLY']
+    node_database_list = DBAligner.run(my_logger, my_logger_simple, my_logger_problem, port_data, [first_GW_data, second_GW_data], dbup_requested)
     if node_database_list == []:
         error_string = 'DBUP - PostgreSQL database has no target nodes, deactivating code.'
         my_logger.debug(error_string)
         my_logger_problem.error(error_string)
+
+    if options_status_dict['DBUP_ONLY']:
+        my_logger.info('DBUP_ONLY completed. Database synchronized; exiting before gateway runtime starts.')
+        if mqtt_started:
+            stop_mqtt_mirroring()
+        return
 
     '''
     [Starting up all Main-type threads, each with distinctive functions]
