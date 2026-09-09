@@ -216,10 +216,10 @@ class MainListenerThread(threading.Thread):
                 self.packet_logger.debug(error_string)
                 self.problem_logger.info(error_string)
                 self.pause_flag = True
-                raise        
+                raise RuntimeError('Serial packet decode failed; gateway reset requested after detected node hang.')
             packet_cut1 = self.data_headerfilter()
             if packet_cut1 is None:
-                raise
+                raise ValueError('Serial packet rejected: no accepted packet header was found.')
             verified_rawpacket = b''
             while packet_cut1 != b'':            # recursive call to function until whole packet is verified
                 packet_cut1, verified_rawpacket = self.data_endfilter(packet_cut1, verified_rawpacket)
@@ -256,7 +256,7 @@ class MainListenerThread(threading.Thread):
                     threads.join()
                 self.stop()            
             else:
-                raise
+                raise ValueError('Serial packet rejected: filtering produced an empty verified packet.')
         except Exception:
             self.problem_logger.exception('Unhandled exception while processing serial packet in MainListenerThread.')
             self.stop()
