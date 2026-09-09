@@ -107,10 +107,11 @@ auth_key_pair = param_dict['auth_key'].replace('[','').replace(']','').replace('
 cert_location = param_dict['cert_loc_linux'].replace('[','').replace(']','').replace('\'','').split(',')[0]
 
 # PostgreSQL connection settings, read from pygw_conf.py so deployment-specific
-# details stay in one place. Defaults intentionally match the original
-# monolithic gateway's psycopg2.connect(...) calls.
+# details stay in one place. DB_USER may override the configured user at
+# runtime (for example DB_USER=s3gw under systemd). If DB_USER is not set,
+# the legacy pygw_conf.py value remains unchanged.
 db_host = getattr(pygw_conf, 'db_host', None)          # None -> local Unix socket
 db_port = getattr(pygw_conf, 'db_port', '5432')
-db_user = getattr(pygw_conf, 'db_user', 'pi')
+db_user = os.getenv('DB_USER', getattr(pygw_conf, 'db_user', 'pi'))
 db_password = getattr(pygw_conf, 'db_password', None)  # None -> peer authentication
 db_name = getattr(pygw_conf, 'db_name', 'serial-gateway-program')
