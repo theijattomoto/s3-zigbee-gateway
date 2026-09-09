@@ -199,6 +199,15 @@ class MainListenerThread(threading.Thread):
                             continue
                     k_index = 0
         return node_list, node_datalist
+
+    def _packet_preview(self, packet, max_bytes=512):
+        '''Return a bounded repr of raw serial bytes for operator diagnostics.'''
+        if packet is None:
+            return 'None'
+        packet_bytes = bytes(packet)
+        if len(packet_bytes) <= max_bytes:
+            return repr(packet_bytes)
+        return repr(packet_bytes[:max_bytes]) + '... <truncated, total=%d bytes>' % len(packet_bytes)
     
     def run(self):
         '''
@@ -219,7 +228,14 @@ class MainListenerThread(threading.Thread):
                 raise RuntimeError('Serial packet decode failed; gateway reset requested after detected node hang.')
             packet_cut1 = self.data_headerfilter()
             if packet_cut1 is None:
-                raise ValueError('Serial packet rejected: no accepted packet header was found.')
+                warning_string = (
+                    'Serial packet ignored: no accepted packet header was found. '
+                    'raw=%s' % self._packet_preview(self.packet)
+                )
+                self.packet_logger.warning(warning_string)
+                self.problem_logger.warning(warning_string)
+                self.stop()
+                return
             verified_rawpacket = b''
             while packet_cut1 != b'':            # recursive call to function until whole packet is verified
                 packet_cut1, verified_rawpacket = self.data_endfilter(packet_cut1, verified_rawpacket)
@@ -256,7 +272,14 @@ class MainListenerThread(threading.Thread):
                     threads.join()
                 self.stop()            
             else:
-                raise ValueError('Serial packet rejected: filtering produced an empty verified packet.')
+                warning_string = (
+                    'Serial packet ignored: filtering produced an empty verified packet. '
+                    'raw=%s' % self._packet_preview(self.packet)
+                )
+                self.packet_logger.warning(warning_string)
+                self.problem_logger.warning(warning_string)
+                self.stop()
+                return
         except Exception:
             self.problem_logger.exception('Unhandled exception while processing serial packet in MainListenerThread.')
             self.stop()
