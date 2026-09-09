@@ -17,6 +17,7 @@ class SerialObjectManager(serial.Serial):
         # close/reopen the descriptor while another thread is writing to it.
         self._io_lock = threading.RLock()
         self._runtime_rx_buffer = bytearray()
+        self._runtime_buffering_enabled = False
         super().__init__(*args, **kwargs)
 
     def write(self, data):
@@ -32,8 +33,16 @@ class SerialObjectManager(serial.Serial):
         with self._io_lock:
             return super().close()
 
-    def read_runtime_frame(self, delimiter=b'\r\n', max_buffer=65536):
+    def read_until(self, expected=b'\n', size=None):
+        '''Use legacy PySerial reads during gateway init and buffered reads at runtime.'''
+        if not self._runtime_buffering_enabled:
+            return super().read_until(expected, size=size)
+        return self.read_runtime_frame(expected, size=size)
+
+    def read_runtime_frame(self, delimiter=b'\r\n', size=None, max_buffer=65536):
         '''Return one complete runtime frame while preserving timeout fragments.'''
+        if isinstance(delimiter, str):
+            delimiter = delimiter.encode('utf-8')
         if not isinstance(delimiter, (bytes, bytearray)) or not delimiter:
             raise ValueError('Serial runtime delimiter must be non-empty bytes.')
         delimiter = bytes(delimiter)
@@ -46,10 +55,10 @@ class SerialObjectManager(serial.Serial):
                 del self._runtime_rx_buffer[:frame_end]
                 return frame
 
-            # Deliberately call the base PySerial implementation here. Legacy
-            # startup/configuration continues to use Serial.read_until() with
-            # its original timeout and multi-line response behavior.
-            chunk = super().read_until(delimiter)
+            # Deliberately call the base PySerial implementation here so
+            # runtime fragments can be accumulated without recursing through
+            # this class's read_until() override.
+            chunk = super().read_until(delimiter, size=size)
             if not chunk:
                 return b''
 
@@ -105,48 +114,60 @@ class SerialObjectManager(serial.Serial):
         '''
         Set the ID configurations of the gateway node which are determined in the startup script. Can be called externally. 
         '''
-        hang_timeout_cnt = 0
-        self.DS_info = None
-        self.write(b'+DS\r\n')
-        while True:
-            i = self.read_until('\r\n')
-            if b'SN' in i and b'HW' in i and b'NodeID' in i and b'PanID' in i and b'ZM-FW' in i:
-                self.DS_info = i
-                break
-            else:
-                hang_timeout_cnt += 1
-            if hang_timeout_cnt > 5:
-                break
-        if self.DS_info is None:
-            return (False, None)
+        # The +DS response is historically consumed using PySerial's original
+        # timeout semantics and may contain multiple CRLF-separated lines.
+        # Temporarily disable runtime buffering whenever gateway init runs.
+        previous_runtime_mode = self._runtime_buffering_enabled
+        self._runtime_buffering_enabled = False
+        self._runtime_rx_buffer.clear()
         try:
-            pending_SN_info = self.DS_info[self.DS_info.find(b'SN'):self.DS_info.find(b'HW')].replace(b'SN: ', b'')
-            if pending_SN_info != self.SN_info:
-                self.SN_info = pending_SN_info
-                if self.lastportindex is None:
+            hang_timeout_cnt = 0
+            self.DS_info = None
+            self.write(b'+DS\r\n')
+            while True:
+                i = self.read_until('\r\n')
+                if b'SN' in i and b'HW' in i and b'NodeID' in i and b'PanID' in i and b'ZM-FW' in i:
+                    self.DS_info = i
+                    break
+                else:
+                    hang_timeout_cnt += 1
+                if hang_timeout_cnt > 5:
+                    break
+            if self.DS_info is None:
+                return (False, None)
+            try:
+                pending_SN_info = self.DS_info[self.DS_info.find(b'SN'):self.DS_info.find(b'HW')].replace(b'SN: ', b'')
+                if pending_SN_info != self.SN_info:
+                    self.SN_info = pending_SN_info
+                    if self.lastportindex is None:
+                        if 'USB0' in self.gateway_name:
+                            self.lastportindex = 0
+                        else:
+                            self.lastportindex = 1
+                    else:
+                        self.lastportindex += 1
+            except:
+                self.SN_info = self.DS_info[self.DS_info.find(b'SN'):self.DS_info.find(b'HW')].replace(b'SN: ', b'')
+                if not final_ports_len or final_ports_len != 1:
+                    self.lastportindex = final_ports_ind
+                else:
                     if 'USB0' in self.gateway_name:
                         self.lastportindex = 0
                     else:
                         self.lastportindex = 1
-                else:
-                    self.lastportindex += 1
-        except:
-            self.SN_info = self.DS_info[self.DS_info.find(b'SN'):self.DS_info.find(b'HW')].replace(b'SN: ', b'')
-            if not final_ports_len or final_ports_len != 1:
-                self.lastportindex = final_ports_ind
-            else:
-                if 'USB0' in self.gateway_name:
-                    self.lastportindex = 0
-                else:
-                    self.lastportindex = 1
-        data = self.GW_datalist[self.lastportindex]
-        info_string = 'SerialManager - Configuring port with Setting ' + str(self.lastportindex)
-        self.logger.debug(info_string)
-        self.simple_logger.debug(info_string)
-        cmd = '+ZC' + data[0] + data[1] + data[2] + '\r\n'
-        self.write(cmd.encode('utf-8'))
-        return (True, data)
-    
+            data = self.GW_datalist[self.lastportindex]
+            info_string = 'SerialManager - Configuring port with Setting ' + str(self.lastportindex)
+            self.logger.debug(info_string)
+            self.simple_logger.debug(info_string)
+            cmd = '+ZC' + data[0] + data[1] + data[2] + '\r\n'
+            self.write(cmd.encode('utf-8'))
+            return (True, data)
+        finally:
+            # After successful startup, or after an hourly/runtime re-init,
+            # return to runtime buffering. During the very first init this
+            # turns buffering on for the main listener loop.
+            self._runtime_buffering_enabled = True if self.is_open else previous_runtime_mode
+
     def gateway_reset_stop2bits(self):
         '''
         Using the same serial port, restart the serial port using the same Serial port settings as used in serial_open_gateway.
