@@ -317,6 +317,7 @@ class RESTMainControllerThread(threading.Thread):
         self.problem_logger = args[4]
         self.interval_sec = args[5]
         self.stop_event = threading.Event()
+        self.stop_lock = threading.Lock()
         self.app = flask.Flask(self.name)
         self.status_error_reasoning = None
         self.status_error_description = None
@@ -371,11 +372,12 @@ class RESTMainControllerThread(threading.Thread):
     
     def stop(self):
         '''Stop the REST server and allow the controller thread to exit cleanly.'''
-        if not self.stop_event.is_set():
-            spec_string = self.name + ' - REST SERVER halted.'
-            self.packet_logger.debug(spec_string)
-            self.simple_packet_logger.debug(spec_string)
-            self.stop_event.set()
+        with self.stop_lock:
+            if not self.stop_event.is_set():
+                self.stop_event.set()
+                spec_string = self.name + ' - REST SERVER halted.'
+                self.packet_logger.debug(spec_string)
+                self.simple_packet_logger.debug(spec_string)
         try:
             if hasattr(self, 'servlet') and self.servlet is not None:
                 self.servlet.stop()
