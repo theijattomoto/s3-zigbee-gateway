@@ -29,8 +29,17 @@ obs_instance = [str(p.info['pid']) for p in psutil.process_iter(attrs=['pid','na
 '''[External configuration file user-defined variables]'''
 file_pathname = str(os.path.abspath(os.path.dirname(sys.argv[0])))
 updating_database_localpath = file_pathname + '/' + str(pygw_conf.localDBpath)
-problemlogpath = file_pathname + '/' + str(pygw_conf.problemlogpath)
-logfilepath = file_pathname + '/' + str(pygw_conf.logfilepath)
+# Production may redirect operator-facing logs outside the protected runtime
+# tree. If the environment variables are not set, preserve the legacy paths
+# from pygw_conf.py for developer and existing non-production installations.
+problemlogpath = os.getenv(
+    'GATEWAY_ERROR_LOG_DIR',
+    file_pathname + '/' + str(pygw_conf.problemlogpath),
+)
+logfilepath = os.getenv(
+    'GATEWAY_LOG_DIR',
+    file_pathname + '/' + str(pygw_conf.logfilepath),
+)
 maplogpath = file_pathname + '/' + str(pygw_conf.maplogpath)
 cycletime = pygw_conf.cycletime
 pollinggap = pygw_conf.pollinggap
