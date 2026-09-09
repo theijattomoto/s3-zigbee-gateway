@@ -6,6 +6,7 @@ SERVICE_NAME="s3-zigbee-gateway"
 TARGET_DIR="/opt/s3-gateway/app"
 BACKUP_ROOT="/opt/s3-gateway/backups"
 OPERATOR_DIR="/home/pi/S3Gateway"
+OPERATOR_LOG_DIR="$OPERATOR_DIR/log"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 SOURCE_DIR="$(dirname "$SCRIPT_DIR")"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -129,6 +130,62 @@ install -d -o s3gw -g s3gw -m 750 \
     "$TARGET_DIR/PYSerialGateway/log" \
     "$TARGET_DIR/PYSerialGateway/errorlog" \
     "$TARGET_DIR/PYSerialGateway/GPSlog"
+
+# Operator logs are real files in ~/S3Gateway/log. Migrate existing symlinked
+# history once, then let the s3gw service append directly to these files.
+install -d -o pi -g s3gw -m 2775 "$OPERATOR_LOG_DIR"
+
+migrate_operator_log() {
+    source_file="$1"
+    dest_file="$2"
+
+    if [ -L "$dest_file" ]; then
+        tmp_file="$(mktemp)"
+        cp -L "$dest_file" "$tmp_file" 2>/dev/null || true
+        rm -f "$dest_file"
+        if [ -s "$tmp_file" ]; then
+            cat "$tmp_file" > "$dest_file"
+        else
+            : > "$dest_file"
+        fi
+        rm -f "$tmp_file"
+    elif [ ! -e "$dest_file" ]; then
+        if [ -f "$source_file" ]; then
+            cp "$source_file" "$dest_file"
+        else
+            : > "$dest_file"
+        fi
+    fi
+
+    chown pi:s3gw "$dest_file"
+    chmod 664 "$dest_file"
+}
+
+migrate_operator_log \
+    "$TARGET_DIR/PYSerialGateway/log/gateway.log" \
+    "$OPERATOR_LOG_DIR/gateway.log"
+migrate_operator_log \
+    "$TARGET_DIR/PYSerialGateway/log/mqtt.log" \
+    "$OPERATOR_LOG_DIR/mqtt.log"
+migrate_operator_log \
+    "$TARGET_DIR/PYSerialGateway/errorlog/error.log" \
+    "$OPERATOR_LOG_DIR/error.log"
+
+set_env_value() {
+    key="$1"
+    value="$2"
+    env_file="$TARGET_DIR/.env"
+
+    if grep -q "^${key}=" "$env_file"; then
+        sed -i "s|^${key}=.*|${key}=${value}|" "$env_file"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$env_file"
+    fi
+}
+
+set_env_value GATEWAY_LOG_DIR "$OPERATOR_LOG_DIR"
+set_env_value GATEWAY_ERROR_LOG_DIR "$OPERATOR_LOG_DIR"
+set_env_value MQTT_LOG_FILE "$OPERATOR_LOG_DIR/mqtt.log"
 
 # Validate the production launcher and critical Python modules without
 # executing DB synchronization or starting the gateway manually.
