@@ -36,6 +36,11 @@ if ! command -v rsync >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v setfacl >/dev/null 2>&1; then
+    echo "setfacl is required for secure operator log access. Install the acl package first." >&2
+    exit 1
+fi
+
 if [ ! -d "$SOURCE_DIR/PYSerialGateway" ] || [ ! -d "$SOURCE_DIR/pyserialgateway" ]; then
     echo "Repository layout not recognized at: $SOURCE_DIR" >&2
     exit 1
@@ -135,6 +140,15 @@ install -d -o s3gw -g s3gw -m 750 \
 # history once, then let the s3gw service append directly to these files.
 install -d -o pi -g s3gw -m 2775 "$OPERATOR_LOG_DIR"
 
+# /home/pi is intentionally private (typically mode 700). Grant only the
+# gateway service account traversal to the operator workspace instead of
+# opening the whole home directory to other users.
+setfacl -m u:s3gw:x /home/pi
+setfacl -m u:s3gw:x "$OPERATOR_DIR"
+setfacl -m u:s3gw:rwx "$OPERATOR_LOG_DIR"
+setfacl -d -m u:s3gw:rwx "$OPERATOR_LOG_DIR"
+setfacl -d -m m:rwx "$OPERATOR_LOG_DIR"
+
 migrate_operator_log() {
     source_file="$1"
     dest_file="$2"
@@ -159,6 +173,7 @@ migrate_operator_log() {
 
     chown pi:s3gw "$dest_file"
     chmod 664 "$dest_file"
+    setfacl -m u:s3gw:rw "$dest_file"
 }
 
 migrate_operator_log \
@@ -170,6 +185,16 @@ migrate_operator_log \
 migrate_operator_log \
     "$TARGET_DIR/PYSerialGateway/errorlog/error.log" \
     "$OPERATOR_LOG_DIR/error.log"
+
+# Fail before service start if the service account cannot actually append to
+# the operator-facing log files. This catches parent-directory traversal and
+# ACL regressions during deployment rather than after the gateway exits.
+for log_file in gateway.log mqtt.log error.log; do
+    if ! runuser -u s3gw -- test -w "$OPERATOR_LOG_DIR/$log_file"; then
+        echo "Operator log is not writable by s3gw: $OPERATOR_LOG_DIR/$log_file" >&2
+        exit 1
+    fi
+done
 
 set_env_value() {
     key="$1"
