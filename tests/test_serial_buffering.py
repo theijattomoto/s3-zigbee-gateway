@@ -74,10 +74,11 @@ class SerialBufferingTests(unittest.TestCase):
 
     def test_gw_initial_forces_legacy_mode_then_enables_runtime_buffering(self):
         manager = self.make_manager()
-        manager.is_open = True
         manager.GW_datalist = [("FE01", "1001", "11")]
         manager.lastportindex = 0
-        manager.SN_info = None
+        # Match the serial number returned by +DS so gw_initial() keeps the
+        # existing gateway index instead of advancing to a second gateway.
+        manager.SN_info = b"1 "
         manager.logger = mock.Mock()
         manager.simple_logger = mock.Mock()
 
