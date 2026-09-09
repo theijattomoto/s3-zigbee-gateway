@@ -5,6 +5,7 @@ set -euo pipefail
 SERVICE_NAME="s3-zigbee-gateway"
 TARGET_DIR="/opt/s3-gateway/app"
 BACKUP_ROOT="/opt/s3-gateway/backups"
+OPERATOR_DIR="/home/pi/S3Gateway"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 SOURCE_DIR="$(dirname "$SCRIPT_DIR")"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -53,6 +54,23 @@ if [ ! -x "$TARGET_DIR/.venv/bin/python" ]; then
     echo "Refusing deployment because production virtualenv is missing: $TARGET_DIR/.venv" >&2
     exit 1
 fi
+
+# Seed the operator-facing files from the current production runtime once.
+# This preserves existing site-specific PAN/channel values instead of
+# copying repository defaults into the operator workspace.
+install -d -o pi -g pi -m 755 "$OPERATOR_DIR"
+if [ ! -f "$OPERATOR_DIR/samplelist.csv" ] && [ -f "$TARGET_DIR/PYSerialGateway/samplelist.csv" ]; then
+    install -o pi -g pi -m 644 "$TARGET_DIR/PYSerialGateway/samplelist.csv" "$OPERATOR_DIR/samplelist.csv"
+fi
+if [ ! -f "$OPERATOR_DIR/pygw_conf.py" ] && [ -f "$TARGET_DIR/PYSerialGateway/pygw_conf.py" ]; then
+    install -o pi -g pi -m 644 "$TARGET_DIR/PYSerialGateway/pygw_conf.py" "$OPERATOR_DIR/pygw_conf.py"
+fi
+if [ ! -f "$OPERATOR_DIR/README-OPERATOR.md" ] && [ -f "$SOURCE_DIR/PYSerialGateway/README-OPERATOR.md" ]; then
+    install -o pi -g pi -m 644 "$SOURCE_DIR/PYSerialGateway/README-OPERATOR.md" "$OPERATOR_DIR/README-OPERATOR.md"
+fi
+
+# Keep the maintenance wrapper in a fixed system path.
+install -o root -g root -m 755 "$SOURCE_DIR/scripts/s3-gateway-dbup" /usr/local/sbin/s3-gateway-dbup
 
 mkdir -p "$BACKUP_DIR"
 
@@ -122,6 +140,7 @@ install -d -o s3gw -g s3gw -m 750 \
 ]: compile(open(p).read(), p, 'exec'); print('SYNTAX_PASS', p)"
 
 bash -n "$TARGET_DIR/PYSerialGateway/run-service.sh"
+bash -n /usr/local/sbin/s3-gateway-dbup
 
 echo "Starting $SERVICE_NAME..."
 systemctl start "$SERVICE_NAME"
