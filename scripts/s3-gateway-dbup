@@ -1,0 +1,178 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SERVICE_NAME="s3-zigbee-gateway"
+OPERATOR_DIR="${S3_OPERATOR_DIR:-/home/pi/S3Gateway}"
+APP_DIR="/opt/s3-gateway/app/PYSerialGateway"
+RUNNER="$APP_DIR/run-service.sh"
+CSV_SOURCE="$OPERATOR_DIR/samplelist.csv"
+CONF_SOURCE="$OPERATOR_DIR/pygw_conf.py"
+CSV_TARGET="$APP_DIR/samplelist.csv"
+CONF_TARGET="$APP_DIR/pygw_conf.py"
+BACKUP_DIR="/home/pi/s3-gateway-backups"
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+DB_NAME="serial-gateway-program"
+SERVICE_STOPPED=0
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Run this command with sudo/root." >&2
+    exit 1
+fi
+
+restart_on_exit() {
+    exit_code=$?
+    trap - EXIT
+    if [ "$SERVICE_STOPPED" -eq 1 ]; then
+        systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+    exit "$exit_code"
+}
+trap restart_on_exit EXIT
+
+echo "=== S3 Gateway DBUP ==="
+
+if [ ! -f "$CSV_SOURCE" ]; then
+    echo "ERROR: operator node list not found: $CSV_SOURCE" >&2
+    exit 1
+fi
+
+if [ ! -f "$CONF_SOURCE" ]; then
+    echo "ERROR: operator gateway config not found: $CONF_SOURCE" >&2
+    exit 1
+fi
+
+if [ ! -x "$RUNNER" ]; then
+    echo "ERROR: production gateway runner not found: $RUNNER" >&2
+    exit 1
+fi
+
+# Validate CSV structure and values without modifying production.
+python3 - "$CSV_SOURCE" <<'PY'
+import csv
+import re
+import sys
+
+path = sys.argv[1]
+required = ['pole_node', 'node', 'pan_id', 'channel']
+rows = []
+seen_nodes = set()
+seen_poles = set()
+
+with open(path, newline='', encoding='utf-8-sig') as fh:
+    reader = csv.DictReader(fh)
+    if reader.fieldnames != required:
+        raise SystemExit('ERROR: CSV header must be exactly: ' + ','.join(required))
+    for line_no, row in enumerate(reader, start=2):
+        if not any((row.get(k) or '').strip() for k in required):
+            continue
+        values = {k: (row.get(k) or '').strip() for k in required}
+        if not all(values.values()):
+            raise SystemExit(f'ERROR: incomplete CSV row at line {line_no}')
+        if values['node'] in seen_nodes:
+            raise SystemExit(f"ERROR: duplicate node ID {values['node']} at line {line_no}")
+        if values['pole_node'] in seen_poles:
+            raise SystemExit(f"ERROR: duplicate pole ID {values['pole_node']} at line {line_no}")
+        if not re.fullmatch(r'[0-9A-Fa-f]{4}', values['node']):
+            raise SystemExit(f"ERROR: node ID must be 4 hex characters at line {line_no}: {values['node']}")
+        try:
+            pan = int(values['pan_id'], 16)
+        except ValueError:
+            raise SystemExit(f"ERROR: invalid PAN ID at line {line_no}: {values['pan_id']}")
+        try:
+            channel = int(values['channel'])
+        except ValueError:
+            raise SystemExit(f"ERROR: invalid Zigbee channel at line {line_no}: {values['channel']}")
+        if not (11 <= channel <= 26):
+            raise SystemExit(f"ERROR: Zigbee channel must be 11-26 at line {line_no}: {channel}")
+        if not (0 <= pan <= 0xFFFF):
+            raise SystemExit(f"ERROR: PAN ID out of range at line {line_no}: {values['pan_id']}")
+        seen_nodes.add(values['node'])
+        seen_poles.add(values['pole_node'])
+        rows.append(values)
+
+if not rows:
+    raise SystemExit('ERROR: CSV contains no target nodes')
+
+print('CSV validation: PASS')
+print(f'Target nodes in CSV: {len(rows)}')
+PY
+
+# Validate operator gateway configuration as Python and verify the two gateway tuples.
+python3 - "$CONF_SOURCE" <<'PY'
+import ast
+import sys
+
+path = sys.argv[1]
+source = open(path, encoding='utf-8').read()
+ast.parse(source, filename=path)
+ns = {}
+exec(compile(source, path, 'exec'), ns, ns)
+
+for name in ('first_GW_data', 'second_GW_data'):
+    value = ns.get(name)
+    if not isinstance(value, tuple) or len(value) != 3:
+        raise SystemExit(f'ERROR: {name} must be a 3-item tuple: (node_id, pan_id, channel)')
+    node_id, pan_id, channel = [str(v).strip() for v in value]
+    if len(node_id) != 4:
+        raise SystemExit(f'ERROR: {name} gateway node ID must be 4 characters')
+    try:
+        pan = int(pan_id, 16)
+        ch = int(channel)
+    except ValueError:
+        raise SystemExit(f'ERROR: invalid PAN ID/channel in {name}: {value!r}')
+    if not (0 <= pan <= 0xFFFF):
+        raise SystemExit(f'ERROR: PAN ID out of range in {name}: {pan_id}')
+    if not (11 <= ch <= 26):
+        raise SystemExit(f'ERROR: Zigbee channel must be 11-26 in {name}: {channel}')
+    print(f'{name}: node={node_id} pan_id={pan_id} channel={channel}')
+
+print('Gateway config validation: PASS')
+PY
+
+mkdir -p "$BACKUP_DIR"
+
+echo "Backing up PostgreSQL..."
+DB_BACKUP="$BACKUP_DIR/serial-gateway-before-dbup-$TIMESTAMP.sql"
+runuser -u s3gw -- pg_dump -d "$DB_NAME" > "$DB_BACKUP"
+echo "Backup created:"
+echo "  $DB_BACKUP"
+
+echo "Backing up current production operator files..."
+cp -a "$CSV_TARGET" "$BACKUP_DIR/samplelist-before-dbup-$TIMESTAMP.csv" 2>/dev/null || true
+cp -a "$CONF_TARGET" "$BACKUP_DIR/pygw_conf-before-dbup-$TIMESTAMP.py" 2>/dev/null || true
+
+echo "Installing operator node list and gateway config into protected runtime..."
+install -o root -g s3gw -m 640 "$CSV_SOURCE" "$CSV_TARGET"
+install -o root -g s3gw -m 640 "$CONF_SOURCE" "$CONF_TARGET"
+
+echo "Stopping production gateway..."
+systemctl stop "$SERVICE_NAME"
+SERVICE_STOPPED=1
+
+echo
+echo "Running database synchronization..."
+cd "$APP_DIR"
+
+if runuser -u s3gw -- env DB_USER=s3gw MQTT_ENABLED=false \
+    "$RUNNER" DBUP_ONLY
+then
+    echo
+    echo "DBUP: PASS"
+else
+    echo
+    echo "ERROR: DBUP failed. PostgreSQL backup is available at: $DB_BACKUP" >&2
+    exit 1
+fi
+
+echo
+echo "Starting production gateway..."
+systemctl start "$SERVICE_NAME"
+SERVICE_STOPPED=0
+
+if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+    echo "ERROR: production gateway did not become active." >&2
+    exit 1
+fi
+
+trap - EXIT
