@@ -16,6 +16,7 @@ RSYNC_EXCLUDES=(
     "--exclude=.env"
     "--exclude=.venv/"
     "--exclude=PYSerialGateway/samplelist.csv"
+    "--exclude=PYSerialGateway/pygw_conf.py"
     "--exclude=PYSerialGateway/log/"
     "--exclude=PYSerialGateway/errorlog/"
     "--exclude=PYSerialGateway/GPSlog/"
