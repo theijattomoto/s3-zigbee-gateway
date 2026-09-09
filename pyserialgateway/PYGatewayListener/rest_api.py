@@ -371,10 +371,11 @@ class RESTMainControllerThread(threading.Thread):
     
     def stop(self):
         '''Stop the REST server and allow the controller thread to exit cleanly.'''
-        spec_string = self.name + ' - REST SERVER halted.'
-        self.packet_logger.debug(spec_string)
-        self.simple_packet_logger.debug(spec_string)
-        self.stop_event.set()
+        if not self.stop_event.is_set():
+            spec_string = self.name + ' - REST SERVER halted.'
+            self.packet_logger.debug(spec_string)
+            self.simple_packet_logger.debug(spec_string)
+            self.stop_event.set()
         try:
             if hasattr(self, 'servlet') and self.servlet is not None:
                 self.servlet.stop()
