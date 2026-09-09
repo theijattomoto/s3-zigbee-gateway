@@ -208,6 +208,21 @@ class MainListenerThread(threading.Thread):
         if len(packet_bytes) <= max_bytes:
             return repr(packet_bytes)
         return repr(packet_bytes[:max_bytes]) + '... <truncated, total=%d bytes>' % len(packet_bytes)
+
+    def _known_control_frame(self, packet):
+        '''Classify expected gateway control/echo traffic that is not node data.'''
+        packet_bytes = bytes(packet or b'').strip()
+        if packet_bytes.startswith(b'+PM'):
+            return 'poll command echo'
+        if packet_bytes.startswith(b'+ZC'):
+            return 'gateway ZigBee configuration'
+        if b'Reset ZigBee' in packet_bytes:
+            return 'gateway ZigBee reset response'
+        if b'Save ZigBee Configuration' in packet_bytes:
+            return 'gateway ZigBee configuration response'
+        if b'Set new NodeID:' in packet_bytes and b'PanID:' in packet_bytes:
+            return 'gateway ZigBee configuration response'
+        return None
     
     def run(self):
         '''
@@ -228,12 +243,20 @@ class MainListenerThread(threading.Thread):
                 raise RuntimeError('Serial packet decode failed; gateway reset requested after detected node hang.')
             packet_cut1 = self.data_headerfilter()
             if packet_cut1 is None:
-                warning_string = (
-                    'Serial packet ignored: no accepted packet header was found. '
-                    'raw=%s' % self._packet_preview(self.packet)
-                )
-                self.packet_logger.warning(warning_string)
-                self.problem_logger.warning(warning_string)
+                control_type = self._known_control_frame(self.packet)
+                if control_type is not None:
+                    self.packet_logger.debug(
+                        'Serial control frame: %s. raw=%s',
+                        control_type,
+                        self._packet_preview(self.packet),
+                    )
+                else:
+                    warning_string = (
+                        'Unknown serial packet ignored: no accepted packet header was found. '
+                        'raw=%s' % self._packet_preview(self.packet)
+                    )
+                    self.packet_logger.warning(warning_string)
+                    self.problem_logger.warning(warning_string)
                 self.stop()
                 return
             verified_rawpacket = b''
@@ -273,7 +296,7 @@ class MainListenerThread(threading.Thread):
                 self.stop()            
             else:
                 warning_string = (
-                    'Serial packet ignored: filtering produced an empty verified packet. '
+                    'Unknown serial packet ignored: filtering produced an empty verified packet. '
                     'raw=%s' % self._packet_preview(self.packet)
                 )
                 self.packet_logger.warning(warning_string)
