@@ -91,8 +91,6 @@ class SerialObjectManager(serial.Serial):
                 self.logger.debug(info_string)
                 self.simple_logger.debug(info_string)
             except:
-                # error_string = 'SerialManager -' + self.port + ' cannot be opened: resources busy.'
-                # self.problem_logger.error(error_string)
                 try:
                     self.close()
                 except:
@@ -118,6 +116,7 @@ class SerialObjectManager(serial.Serial):
         # timeout semantics and may contain multiple CRLF-separated lines.
         # Temporarily disable runtime buffering whenever gateway init runs.
         previous_runtime_mode = self._runtime_buffering_enabled
+        init_success = False
         self._runtime_buffering_enabled = False
         self._runtime_rx_buffer.clear()
         try:
@@ -161,12 +160,12 @@ class SerialObjectManager(serial.Serial):
             self.simple_logger.debug(info_string)
             cmd = '+ZC' + data[0] + data[1] + data[2] + '\r\n'
             self.write(cmd.encode('utf-8'))
+            init_success = True
             return (True, data)
         finally:
-            # After successful startup, or after an hourly/runtime re-init,
-            # return to runtime buffering. During the very first init this
-            # turns buffering on for the main listener loop.
-            self._runtime_buffering_enabled = True if self.is_open else previous_runtime_mode
+            # Enable buffered framing only after gateway initialization has
+            # completed successfully. If init failed, preserve the prior mode.
+            self._runtime_buffering_enabled = True if init_success else previous_runtime_mode
 
     def gateway_reset_stop2bits(self):
         '''
