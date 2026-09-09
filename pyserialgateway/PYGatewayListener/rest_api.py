@@ -17,6 +17,12 @@ if not hasattr(threading.Thread, 'isAlive'):
 import flask
 import wsgiserver
 
+# WSGIserver 1.3's ThreadPool.stop() calls isAlive() directly on its
+# WorkerThread implementation. Patch that concrete class as well for
+# Python 3.13 compatibility.
+if hasattr(wsgiserver, 'WorkerThread') and not hasattr(wsgiserver.WorkerThread, 'isAlive'):
+    wsgiserver.WorkerThread.isAlive = wsgiserver.WorkerThread.is_alive
+
 class RESTAPI(object):
     '''
     HTTP REST Server API object that shapes the properties of a Server around its communicating actions when a Web Servlet creates and hosts the Server.
