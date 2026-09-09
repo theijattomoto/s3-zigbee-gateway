@@ -7,6 +7,13 @@ thread.
 import time
 import re
 import threading
+
+# WSGIserver 1.3 still calls Thread.isAlive(), which was removed from
+# modern Python. Preserve compatibility with Python 3.13 without modifying
+# the installed third-party package.
+if not hasattr(threading.Thread, 'isAlive'):
+    threading.Thread.isAlive = threading.Thread.is_alive
+
 import flask
 import wsgiserver
 
