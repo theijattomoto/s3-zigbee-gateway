@@ -4,8 +4,7 @@ threads, and runs the serial-read / packet-dispatch loop.
 
 This is main() exactly as it was in the original single-file script, just
 now pulling its collaborator classes and config values in from the other
-modules in this package instead of finding them as bare names in the same
-file.
+modules in this package instead of finding them as bare names in the same file.
 '''
 import time
 import sys, os, subprocess
@@ -509,7 +508,7 @@ def main(*args):
                     poll_t.set_GPS_confirmed_list()
             '''Loop-based packet listener invoker'''
             try:
-                packet = SerialProcessObject.read_until(b'#\r\n')
+                packet = SerialProcessObject.read_until(b'\r\n')
             except Exception as error:
                 if abs(dt_datetimenow.second) == 0:
                     my_logger.error(error)
