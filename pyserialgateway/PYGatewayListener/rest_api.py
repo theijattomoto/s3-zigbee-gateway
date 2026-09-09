@@ -357,10 +357,17 @@ class RESTMainControllerThread(threading.Thread):
             self.stop()
     
     def stop(self):
-        '''Functions to be executed if an unexpected exit has occurred, to both the super thread or the overall script. Stop event is set to cleanly exit the super thread.'''
+        '''Stop the REST server and allow the controller thread to exit cleanly.'''
         spec_string = self.name + ' - REST SERVER halted.'
         self.packet_logger.debug(spec_string)
         self.simple_packet_logger.debug(spec_string)
         self.stop_event.set()
+        try:
+            if hasattr(self, 'servlet') and self.servlet is not None:
+                self.servlet.stop()
+        except Exception as error:
+            self.problem_logger.error(
+                self.name + ' - REST server shutdown error: ' + str(error)
+            )
         
 
