@@ -61,7 +61,20 @@ def main(*args):
     
     '''
     [Start up variables to support functions used by Main function & dynamic objects]    
+    # my_logger_* :- Different static file loggers for different occasions (usage details as below)        
+    # formatter_* :- Different logging formats                                                            
+    # options_string :- Startup argument string creation for declaration of extra functions    
+    # all_other_main_threads :- Initial list of other Main-type threads that will be used for WATCHDOG monitoring
+    # datenow, datein :- Startup reference dates for script startup and other variables                             
     # *_datetimenow :- Formation of time stamps according to times declared in config.properties                    
+    # between_flag :- time profiles determined by active_time and inactive_time of config.properties                
+    # *_fh :- File handlers to park formatter_* alongside repository properties                                        
+    # my_logger_* :- (Usage details)                                                                                
+    #    my_logger[debug] - Displays data in console only                                                            
+    #    my_logger[info&+] - Displays data in console, records system time & data in 2-line format in gateway.log.*    
+    #    my_logger_simple[debug&+] - Records system time & data in 1-line format in gateway.log.*                    
+    #    my_logger_problem[debug&+] - Records system time & data in 1-line format in error.log.*            
+    # kmlpathname :- Filename for .kml type map created using reference date                    
     '''
     my_logger = logging.getLogger('PacketListener')
     my_logger.setLevel(logging.DEBUG)
@@ -110,17 +123,43 @@ def main(*args):
     kmllogfilename = '_'.join(str(it) for it in datein) + '_' + MQTT_client_ID + '_GPSscan.kml'
     kmlpathname = maplogpath+'/'+kmllogfilename
 
+    # MQTT is an independent gateway transport. Start it before probing Zigbee
+    # serial so broker status/reconnect remains alive while hardware is absent.
     mqtt_started = start_mqtt_mirroring()
     if mqtt_started:
         my_logger.info('MQTT transport started independently of Zigbee serial.')
     else:
         my_logger.warning('MQTT transport is disabled or failed to start.')
-
+    
+    
+    '''
+    [Creating dynamic/inheritable objects to support resources used by Threads]
+    # DatabaseAligner :- Database-type actions, used to select/configure data in DB                        
+    # SerialObjectManager :- USB/COM port actions, supports dynamic runtime usage                        
+    # KMLMapManager :- Mapping actions, for .xml file type logging specific to Google Earth                
+    # RESTAPI :- Properties for external Web REST Server application when receiving GET requests
+    '''
     DBAligner = StatObjectExceptionAPI(DatabaseAligner,my_logger,my_logger_problem)
     KMLMapper = StatObjectExceptionAPI(KMLMapManager,my_logger,my_logger_problem)
     SerialProcessObject = SerialObjectManager()
     RESTAPIObject = RESTAPI()
 
+
+    '''
+    [Manually INIT dynamic/inheritable objects with start up variables]
+    # KMLDocumentElement :- File pointer to write map data that points back to KMLMapper
+    # port_* :- Port resources pointer that points back to port determined by SerialProcessObject
+    # node_database_list :- Main node list cross-checked by static database determined by DBAligner
+    # options_status_dict (all flags are initially disabled)
+    :- 'DBUP', enable function to auto-sync DB with Excel daily, or on every port switch
+    :- 'DBUP_ONLY', sync DB once from the operator CSV and exit before runtime threads start
+    :- 'GPSUP', enable GPS mapping feature
+    :- 'DEMOUP', disable all node recovery actions during runtime
+    :- 'TESTUP', disable data sending to main server, only to test server(s) listed in configuration
+    :- 'NOSELMOS', disable uploading data to remote servers
+    :- 'NOPOLL', disable cycle-based active polling actions for preset node list
+    :- 'NOAUTH', disable basic authentication level on packet sent
+    '''
     try:
         if not os.path.isfile(kmlpathname):
             raise
@@ -149,24 +188,36 @@ def main(*args):
         pass
 
     if not port_status:
-        my_logger.warning('No Zigbee gateway serial port detected. MQTT remains active; waiting for Zigbee gateway.')
+        my_logger.warning(
+            'No Zigbee gateway serial port detected. MQTT remains active; waiting for Zigbee gateway.'
+        )
         retry_interval = max(1.0, float(os.getenv('ZIGBEE_SERIAL_RETRY_SECONDS', '5')))
         last_wait_log = 0.0
         try:
             while not port_status:
                 now = time.monotonic()
                 if now - last_wait_log >= 30.0:
-                    my_logger.info('Waiting for Zigbee gateway serial port; retrying every %.1fs.', retry_interval)
+                    my_logger.info(
+                        'Waiting for Zigbee gateway serial port; retrying every %.1fs.',
+                        retry_interval,
+                    )
                     last_wait_log = now
                 time.sleep(retry_interval)
-                port_status, port_name, port_data, port_index = SerialProcessObject.ini_run(my_logger, my_logger_simple, my_logger_problem, 1, [first_GW_data, second_GW_data], None)
+                port_status, port_name, port_data, port_index = SerialProcessObject.ini_run(
+                    my_logger,
+                    my_logger_simple,
+                    my_logger_problem,
+                    1,
+                    [first_GW_data, second_GW_data],
+                    None,
+                )
         except KeyboardInterrupt:
             my_logger.info('Gateway shutdown requested while waiting for Zigbee serial.')
             if mqtt_started:
                 stop_mqtt_mirroring()
             return
         my_logger.info('Zigbee gateway serial port detected: %s', port_name)
-
+    
     dbup_requested = options_status_dict['DBUP'] or options_status_dict['DBUP_ONLY']
     node_database_list = DBAligner.run(my_logger, my_logger_simple, my_logger_problem, port_data, [first_GW_data, second_GW_data], dbup_requested)
     if node_database_list == []:
@@ -180,6 +231,24 @@ def main(*args):
             stop_mqtt_mirroring()
         return
 
+    '''
+    [Starting up all Main-type threads, each with distinctive functions]
+    # If no USB ports are found during startup, MQTT remains active and serial discovery retries until the gateway appears.
+    # If startup argument has 'NOPOLL', only the MainPollingThread is disabled. All other functions will be alive, and SerialPort occupied.
+    # If startup argument has 'GPSUP', MainPollingThread will double poll for GPS data at a specific time, which will then be used by the KMLMapper object.
+    # If startup argument has 'NOSELMOS', any updated packet data will not be uploaded to remote servers. Only to be used in gateway in which its configuration has not been set up properly to not affect big data.
+    # poll_t (MainPolling)        :-    1. Used to poll for node heart beat/GPS data when given a node list. 
+    #                                2. Confirms GPS data from nodes in daily cycles to disable double recording.
+    # reset_t (MainReset)        :-    1. Used to send reset commands for nodes who are deemed faulty at the time, determined by listened packets.
+    #                                2. Forward commands sent from REST SELMOS application to the SerialPort.
+    #                                3. Confirms Timetable queries for nodes who are deemed corrupted in its timetable configuration, determined by listened packets.
+    #                                4. Confirms auto-DB insert node queries for nodes who completes the reactive reset sequence, determined by listened packets.
+    # record_t (MainRecord)        :-    1. Tags faulty packets with different error types and records them. Dedicated to error log.
+    # mqtt_t (MQTT, unused)        :-    1. Client central to publish data via MQTT link to message broker.
+    #                                 2. Accepts all data asynchronously from all client sources in the message broker.
+    # REST_t (MainController)    :-    1. Server central to accept data via HTTP link from all valid client sources.
+    # http_t (MainHTTPURL)        :-    1. Client central to send data via HTTP link to rest_location
+    '''
     try:
         if port_status == False or options_status_dict['NOPOLL']:
             raise
@@ -205,26 +274,28 @@ def main(*args):
         reset_flag = False
         my_logger.warning('Reset thread disabled.')
     try:
-        record_t = MainRecordThread(my_logger_problem, record_queue)
+        record_t = MainRecordThread(my_logger_problem, record_queue, 1)
         record_t.start()
         record_flag = True
         all_other_main_threads.append((record_t.name, record_t))
     except:
-        record_t = MainRecordThread(my_logger_problem, record_queue)
-        record_t.stop()
         record_flag = False
         my_logger.warning('Record thread disabled.')
     try:
-        REST_t = RESTMainControllerThread(my_logger, my_logger_simple, RESTAPIObject)
+        if port_status == False:
+            raise
+        REST_t = RESTMainControllerThread('MainController', RESTAPIObject, my_logger, my_logger_simple, my_logger_problem, 0.5)
         REST_t.start()
         REST_flag = True
         all_other_main_threads.append((REST_t.name, REST_t))
     except:
-        REST_t = RESTMainControllerThread(my_logger, my_logger_simple, RESTAPIObject)
+        REST_t = RESTMainControllerThread('MainController', RESTAPIObject, my_logger, my_logger_simple, my_logger_problem, 0.5)
         REST_t.stop()
         REST_flag = False
-        my_logger.warning('REST controller thread disabled.')
+        my_logger.warning('REST server thread disabled.')
     try:
+        if port_status == False:
+            raise
         http_t = MainHTTPURLThread(my_logger, my_logger_simple, my_logger_problem, msg_queue, full_URLstring, 0.5, options_status_dict, test_align_flag)
         http_t.start()
         http_flag = True
@@ -234,7 +305,15 @@ def main(*args):
         http_t.stop()
         http_flag = False
         my_logger.warning('HTTP-URL thread disabled.')
-
+    '''
+    [Main Listener loop start-up variables]
+    # *_threads :- Since multiple Listener processing threads can be created at the same time, these variables help to cleanly execute and kill threads as the main loop iterates.
+    # read_port_status :- Defaults to the current port status. Must be True at start. Used for dynamic port switching in code runtime.
+    # msg_recv :- Total number of received ACKs via HTTP/MQTT link, fetched from Main-type thread. Resets daily. Defaults to None if http_t/mqtt_t is not alive.
+    # msg_publish :- Total number of sent packets via HTTP/MQTT link, fetched from Main-type thread. Resets daily. Defaults to None if http_t/mqtt_t is not alive.
+    # hoursoffset :- Defaults & resets daily to 24 hours, as an increment to dynamic time checkpoints. Mainly used within active hours to record hourly statistics.
+    # If startup argument has 'DEMOUP', all manual control lantern options are allowed from various sources, and will not be reset or re-overwritten by autonomous control. Ideal for DEMO mode only. 
+    '''  
     listener_threads = []
     inactive_threads = []
     inactive_other_main_threads = []
@@ -251,7 +330,9 @@ def main(*args):
     except:
         pass
     GPS_confirmed_list = None
-
+    '''
+    [Start of Main Listener loop]
+    '''
     try:
         spec_string = '[START] PYGATEWAY LISTENER @ ' + time.strftime('%d-%m-%Y %H:%M:%S', time.localtime())
         my_logger.info(spec_string)
@@ -259,6 +340,7 @@ def main(*args):
         while True:
             datetimenow = time.strftime('%d-%m-%Y %H:%M:%S', time.localtime())
             dt_datetimenow = datetime.datetime(*time.localtime()[:6])
+            '''Main threads (excluding loop) internal WATCHDOG manager'''
             if len(all_other_main_threads) >= 1:
                 for k in range(0, len(all_other_main_threads)):
                     main_thread_name, main_thread_obj = all_other_main_threads[k]
@@ -297,7 +379,7 @@ def main(*args):
                         inactive_other_main_threads.append(all_other_main_threads[k])
                         new_main_thread_obj.start()
                         new_other_main_threads.append((new_main_thread_obj.name, new_main_thread_obj))
-                if len(inactive_other_main_threads) >= 1:
+                if len(inactive_other_main_threads)    >= 1:
                     for l in range(0, len(inactive_other_main_threads)):
                         all_other_main_threads.remove(inactive_other_main_threads[l])
                     inactive_other_main_threads.clear()
@@ -305,6 +387,7 @@ def main(*args):
                     for m in range(0, len(new_other_main_threads)):
                         all_other_main_threads.append(new_other_main_threads[m])
                     new_other_main_threads.clear()
+            '''Full database & poll list manager'''
             if poll_flag:
                 all_poll_loop_count = poll_t.get_all_poll_loop_count()
                 if all_poll_loop_count >= 100.0:
@@ -324,16 +407,23 @@ def main(*args):
                         _ , poll_exempt_list = DBAligner.final_read(port_data)
                         poll_t.set_poll_list(node_database_list, poll_exempt_list)
                         poll_t.set_poll_pulse_status()
+            '''Daily parameters refresh'''
             portchecktimedelta = portcheck_datetimenow - dt_datetimenow
             if portchecktimedelta.days < 0:
                 portcheck_datetimenow += datetime.timedelta(hours=1)
                 read_port_status, port_data = SerialProcessObject.gw_initial(port_index, None)
+            '''
+            8/6/2021 - Moved poll_t.set_GPS_confirmed_list() to daily repositories refresh section due to changes in output only single .kml file
+            - However, reset_t.set_awaiting_E1_list() remains on-date, due to node not being recognised on-time before new GPS polling cycle.
+            '''
             GPStimedelta = GPSactive_datetimenow - dt_datetimenow
             if GPStimedelta.days < 0:
                 GPSactive_datetimenow += datetime.timedelta(days=1)
                 if reset_flag:
                     reset_t.set_awaiting_E1_list()
-            if between_flag != 2:
+            if between_flag == 2:
+                pass
+            else:
                 activetimedelta = active_datetimenow - dt_datetimenow
                 inactivetimedelta = inactive_datetimenow - dt_datetimenow
                 aggressivepolltimedelta = aggressivepoll_datetimenow - dt_datetimenow
@@ -388,6 +478,9 @@ def main(*args):
                     if http_flag:
                         http_t.set_stats()
                     _ = DBAligner.dtime_active_check()
+                else:
+                    pass
+            '''Daily repositories refresh'''
             if datetimenow[0:10] != datenow:
                 datein = list(time.localtime()[0:3])
                 datenow = datetimenow[0:10]
@@ -416,10 +509,6 @@ def main(*args):
                     poll_t.set_GPS_confirmed_list()
             '''Loop-based packet listener invoker'''
             try:
-                # Node application packets terminate with b'#\r\n'. PySerial
-                # requires a bytes delimiter; the previous string delimiter
-                # (and trailing space) could never match, so reads ended only
-                # on timeout and split control frames at arbitrary byte offsets.
                 packet = SerialProcessObject.read_until(b'#\r\n')
             except Exception as error:
                 if abs(dt_datetimenow.second) == 0:
@@ -439,6 +528,7 @@ def main(*args):
                 main_t.start()
                 main_t.join()
                 listener_threads.append(main_t)
+            '''Listener thread manager for packet listeners'''
             if len(listener_threads) >= 1:    
                 for i in range(0, len(listener_threads)):
                     if listener_threads[i].status():
@@ -450,6 +540,7 @@ def main(*args):
                     for j in range(0, len(inactive_threads)):
                         listener_threads.remove(inactive_threads[j])
                     inactive_threads.clear()
+            '''Serial port manager'''
             retry_logic = not read_port_status 
             if poll_flag:
                 retry_logic |= poll_t.get_pause_status()
@@ -467,27 +558,71 @@ def main(*args):
                         SerialProcessObject = spo_2
                         read_port_status = True
                         port_data = retry_port_data
-                        port_index = retry_port_index
-                        port_name = retry_port_name
+                        node_database_list = DBAligner.run(my_logger, my_logger_simple, my_logger_problem, port_data, [first_GW_data, second_GW_data], options_status_dict['DBUP'])
                         if poll_flag:
-                            poll_t.set_pause_status(spo_2)
-                        my_logger.info('Serial port recovered: %s', port_name)
+                            if forced_port_switch_flag:#reset poll loop count, reset all polling param, forced port flag False
+                                previous_port_index = last_port_index
+                                port_index = retry_port_index
+                                forced_port_switch_flag = False
+                                poll_t.set_pause_status(spo_2)
+                                _ , poll_exempt_list = DBAligner.final_read(port_data)
+                                if previous_port_index != retry_port_index:
+                                    poll_t.set_check_override_off_status()
+                                    poll_t.set_poll_list(node_database_list, poll_exempt_list)
+                                else:
+                                    poll_t.set_poll_list(None, poll_exempt_list)
+                                last_port_index = None
+                            else:
+                                poll_t.set_pause_status(spo_2)
+                                _ , poll_exempt_list = DBAligner.final_read(port_data)
+                                if port_index != retry_port_index:
+                                    port_index = retry_port_index
+                                    poll_t.set_check_override_off_status()
+                                    poll_t.force_continue_loop()
+                                    poll_t.set_poll_list(node_database_list, poll_exempt_list)
+                                else:
+                                    poll_t.set_poll_list(None, poll_exempt_list)
+                        else:
+                            if options_status_dict['NOPOLL']:
+                                all_other_main_threads.append((poll_t.name, poll_t))
+                        if not http_flag:
+                            all_other_main_threads.append((http_t.name, http_t))
+                        if not REST_flag:
+                            all_other_main_threads.append((REST_t.name, REST_t))
                     else:
+                        if abs(dt_datetimenow.second) == 0:
+                            my_logger.debug('All serial ports cannot be opened: reconnecting...')
+                            my_logger_simple.debug('All serial ports cannot be opened: reconnecting...')
+                            time.sleep(0.5)
+                except serial.SerialException as error:
+                    if abs(dt_datetimenow.second) == 0:
+                        my_logger.debug(error)
+                        my_logger_simple.debug(error)
                         time.sleep(0.5)
-                except Exception as error:
-                    my_logger_problem.exception('Serial port recovery failed.')
-                    time.sleep(0.5)
-    except KeyboardInterrupt:
-        my_logger.info('Gateway shutdown requested.')
     finally:
-        try:
-            for _, thread_obj in all_other_main_threads:
-                thread_obj.stop()
-        except Exception:
-            pass
-        try:
-            SerialProcessObject.force_close()
-        except Exception:
-            pass
+        if poll_flag:
+            poll_t.stop()
+            poll_t.join()
+        if reset_flag:
+            reset_t.stop()
+            reset_t.join()
+        if record_flag:
+            record_t.stop()
+            record_t.join()
+        if http_flag:
+            http_t.stop()
+            http_t.join()
+        if REST_flag:
+            REST_t.stop()
+            REST_t.join()
+        for threads in listener_threads:
+            threads.stop()
+            threads.join()
         if mqtt_started:
             stop_mqtt_mirroring()
+        my_logger.debug('All threading processes stopped.')
+        my_logger_simple.debug('All threading processes stopped.')
+    
+
+if __name__ == '__main__':
+    main()
