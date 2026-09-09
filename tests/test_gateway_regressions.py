@@ -244,21 +244,23 @@ class DatabaseSchemaRegressionTests(unittest.TestCase):
 
 
 class NoSerialStartupRegressionTests(unittest.TestCase):
-    def test_no_serial_port_exits_before_worker_threads_and_listener_loop(self):
+    def test_no_serial_port_waits_before_worker_threads_and_listener_loop(self):
         source = (GATEWAY_PACKAGE / "main.py").read_text(encoding="utf-8")
 
         guard = source.index("if not port_status:")
-        exit_message = source.index(
-            "No Zigbee gateway serial port detected. Gateway listener exiting."
+        wait_message = source.index(
+            "No Zigbee gateway serial port detected. MQTT remains active; waiting for Zigbee gateway."
         )
+        retry_loop = source.index("while not port_status:", guard)
         record_thread_start = source.index("record_t.start()")
         listener_start = source.index(
             "spec_string = '[START] PYGATEWAY LISTENER @ '"
         )
         listener_loop = source.index("while True:", listener_start)
 
-        self.assertLess(guard, exit_message)
-        self.assertLess(exit_message, record_thread_start)
+        self.assertLess(guard, wait_message)
+        self.assertLess(wait_message, retry_loop)
+        self.assertLess(retry_loop, record_thread_start)
         self.assertLess(record_thread_start, listener_start)
         self.assertLess(listener_start, listener_loop)
 
