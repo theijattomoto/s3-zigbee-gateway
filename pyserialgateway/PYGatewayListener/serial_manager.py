@@ -16,7 +16,7 @@ class SerialObjectManager(serial.Serial):
         # Serialize writes and port lifecycle operations so one thread cannot
         # close/reopen the descriptor while another thread is writing to it.
         self._io_lock = threading.RLock()
-        self._rx_buffer = bytearray()
+        self._runtime_rx_buffer = bytearray()
         super().__init__(*args, **kwargs)
 
     def write(self, data):
@@ -25,47 +25,39 @@ class SerialObjectManager(serial.Serial):
 
     def open(self):
         with self._io_lock:
-            self._rx_buffer.clear()
+            self._runtime_rx_buffer.clear()
             return super().open()
 
     def close(self):
         with self._io_lock:
             return super().close()
 
-    def read_until(self, expected=b'\n', size=None):
-        '''
-        Return one complete delimiter-terminated serial frame.
-
-        PySerial may return partial bytes when its timeout expires. Preserve
-        those bytes across calls so fragments such as b'+' followed later by
-        b'PM8E9E\r\n' are reassembled before reaching MainListenerThread.
-
-        Accept a legacy string delimiter for compatibility with gw_initial().
-        '''
-        if isinstance(expected, str):
-            expected = expected.encode('utf-8')
-        if not isinstance(expected, (bytes, bytearray)) or not expected:
-            raise ValueError('Serial frame delimiter must be non-empty bytes.')
-        expected = bytes(expected)
-        max_buffer = 65536
+    def read_runtime_frame(self, delimiter=b'\r\n', max_buffer=65536):
+        '''Return one complete runtime frame while preserving timeout fragments.'''
+        if not isinstance(delimiter, (bytes, bytearray)) or not delimiter:
+            raise ValueError('Serial runtime delimiter must be non-empty bytes.')
+        delimiter = bytes(delimiter)
 
         while True:
-            frame_end = self._rx_buffer.find(expected)
+            frame_end = self._runtime_rx_buffer.find(delimiter)
             if frame_end != -1:
-                frame_end += len(expected)
-                frame = bytes(self._rx_buffer[:frame_end])
-                del self._rx_buffer[:frame_end]
+                frame_end += len(delimiter)
+                frame = bytes(self._runtime_rx_buffer[:frame_end])
+                del self._runtime_rx_buffer[:frame_end]
                 return frame
 
-            chunk = super().read_until(expected, size=size)
+            # Deliberately call the base PySerial implementation here. Legacy
+            # startup/configuration continues to use Serial.read_until() with
+            # its original timeout and multi-line response behavior.
+            chunk = super().read_until(delimiter)
             if not chunk:
                 return b''
 
-            self._rx_buffer.extend(chunk)
-            if len(self._rx_buffer) > max_buffer:
-                self._rx_buffer.clear()
+            self._runtime_rx_buffer.extend(chunk)
+            if len(self._runtime_rx_buffer) > max_buffer:
+                self._runtime_rx_buffer.clear()
                 raise serial.SerialException(
-                    'Serial receive buffer exceeded %d bytes without a complete frame.' % max_buffer
+                    'Serial runtime receive buffer exceeded %d bytes without a complete frame.' % max_buffer
                 )
 
     def serial_open_gateway(self):
