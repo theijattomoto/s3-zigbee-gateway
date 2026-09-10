@@ -89,7 +89,7 @@ class DBKLHTTPSMirroringTests(unittest.TestCase):
                 OSError("REST unavailable"),
                 None,
             ]
-            with mock.patch.object(self.module.ssl.SSLContext, "load_cert_chain"):
+            with mock.patch.object(thread, "_build_dbkl_ssl_context", return_value=mock.Mock()):
                 thread._send_primary_rest(indata, "001A")
                 thread._send_dbkl_https(indata, "001A")
 
@@ -128,6 +128,42 @@ class DBKLHTTPSMirroringTests(unittest.TestCase):
             thread._send_dbkl_https(b"payload", "001A")
 
         send_request.assert_not_called()
+
+    def test_verified_tls_is_default_without_client_certificate(self):
+        thread = self.make_thread()
+        context = mock.Mock()
+
+        with mock.patch.object(self.module.ssl, "create_default_context", return_value=context) as create_context:
+            returned = thread._build_dbkl_ssl_context()
+
+        self.assertIs(returned, context)
+        create_context.assert_called_once_with(cafile=None)
+        context.load_cert_chain.assert_not_called()
+
+    def test_custom_ca_bundle_is_used_when_configured(self):
+        thread = self.make_thread(DBKL_CA_CERT="/tmp/dbkl-ca.pem")
+        context = mock.Mock()
+
+        with mock.patch.object(self.module.ssl, "create_default_context", return_value=context) as create_context:
+            thread._build_dbkl_ssl_context()
+
+        create_context.assert_called_once_with(cafile="/tmp/dbkl-ca.pem")
+
+    def test_client_certificate_is_optional_and_explicit(self):
+        thread = self.make_thread(
+            DBKL_CLIENT_CERT_ENABLED="true",
+            DBKL_CLIENT_CERT="/tmp/new-client.pem",
+            DBKL_CLIENT_KEY="/tmp/new-client.key",
+        )
+        context = mock.Mock()
+
+        with mock.patch.object(self.module.ssl, "create_default_context", return_value=context):
+            thread._build_dbkl_ssl_context()
+
+        context.load_cert_chain.assert_called_once_with(
+            "/tmp/new-client.pem",
+            keyfile="/tmp/new-client.key",
+        )
 
 
 if __name__ == "__main__":
