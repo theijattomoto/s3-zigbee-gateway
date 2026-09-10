@@ -2,19 +2,9 @@
 MainHTTPURLThread: forwards validated gateway packets to the configured REST
 server and mirrors the same payload to the DBKL HTTPS endpoint.
 
-DBKL mirroring preserves the legacy encrypted configuration by default:
-- rest_location supplies the primary REST URL/path.
-- auth_key supplies the DBKL host/port and optional basic-auth credentials.
-- cert_loc_linux supplies the client certificate.
-
-Runtime overrides:
-- DBKL_HTTPS_ENABLED=true|false
-- DBKL_HTTPS_URL=https://host[:port]/path
-- DBKL_HTTPS_TIMEOUT=0.5
-
-The primary REST delivery and DBKL HTTPS mirror are intentionally independent:
-a failure on one destination does not prevent an attempt to deliver to the
-other destination.
+DBKL HTTPS defaults to normal server-certificate verification. A custom CA
+bundle can be supplied when the server omits an intermediate certificate.
+Client certificates are optional and disabled by default.
 '''
 import base64
 import datetime
@@ -37,12 +27,6 @@ def _env_bool(name, default):
 
 
 def build_dbkl_https_url(rest_url, auth_values, explicit_url=None):
-    '''Build the DBKL HTTPS endpoint while preserving the REST path.
-
-    If DBKL_HTTPS_URL is supplied, it is used exactly as configured. Otherwise
-    the legacy behavior is retained: auth_key[0:2] provide the DBKL host/port,
-    while the path/query are inherited from rest_location.
-    '''
     if explicit_url:
         return explicit_url.strip()
 
@@ -59,7 +43,6 @@ def build_dbkl_https_url(rest_url, auth_values, explicit_url=None):
             ('https', destination, parsed.path, parsed.query, parsed.fragment)
         )
 
-    # Legacy fallback for a URL-like value without a scheme.
     path_index = rest_url.find('/')
     path = rest_url[path_index:] if path_index >= 0 else ''
     return 'https://' + destination + path
@@ -71,8 +54,6 @@ def _basic_auth_header(username, password):
 
 
 class MainHTTPURLThread(threading.Thread):
-    '''Forward valid node packets to REST and mirror them to DBKL HTTPS.'''
-
     def __init__(self, *args):
         super(MainHTTPURLThread, self).__init__()
         self.arguments = args
@@ -98,6 +79,12 @@ class MainHTTPURLThread(threading.Thread):
             self.dbkl_https_timeout = float(os.getenv('DBKL_HTTPS_TIMEOUT', '0.5'))
         except ValueError:
             self.dbkl_https_timeout = 0.5
+
+        self.dbkl_tls_verify = _env_bool('DBKL_TLS_VERIFY', True)
+        self.dbkl_ca_cert = os.getenv('DBKL_CA_CERT', '').strip()
+        self.dbkl_client_cert_enabled = _env_bool('DBKL_CLIENT_CERT_ENABLED', False)
+        self.dbkl_client_cert = os.getenv('DBKL_CLIENT_CERT', '').strip()
+        self.dbkl_client_key = os.getenv('DBKL_CLIENT_KEY', '').strip()
 
     def get_stats(self):
         return (self.glob_POST_counter, self.glob_ACK_counter)
@@ -262,8 +249,6 @@ class MainHTTPURLThread(threading.Thread):
             self.problem_logger.error(message)
 
     def _send_primary_rest(self, indata, node_id):
-        # Preserve the legacy routing matrix.
-        # test_align_flag=True + TESTUP=False means main/DBKL only.
         if self.test_align_flag and not self.test_flag:
             return
 
@@ -279,12 +264,27 @@ class MainHTTPURLThread(threading.Thread):
         except Exception as error:
             self._log_delivery_error('/post_conn', node_id, error)
 
+    def _build_dbkl_ssl_context(self):
+        if self.dbkl_tls_verify:
+            context = ssl.create_default_context(
+                cafile=self.dbkl_ca_cert or None,
+            )
+        else:
+            context = ssl._create_unverified_context()
+
+        if self.dbkl_client_cert_enabled:
+            client_cert = self.dbkl_client_cert or cert_location
+            client_key = self.dbkl_client_key or None
+            if not client_cert:
+                raise ValueError('DBKL client certificate is enabled but no certificate path is configured')
+            context.load_cert_chain(client_cert, keyfile=client_key)
+
+        return context
+
     def _send_dbkl_https(self, indata, node_id):
         if not self.dbkl_https_enabled:
             return
 
-        # Preserve legacy TESTUP semantics: TESTUP redirects to the backup/test
-        # destination and suppresses DBKL/main-server delivery.
         if self.test_flag:
             return
 
@@ -294,8 +294,7 @@ class MainHTTPURLThread(threading.Thread):
                 auth_key_pair,
                 explicit_url=self.dbkl_https_url,
             )
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-            context.load_cert_chain(cert_location)
+            context = self._build_dbkl_ssl_context()
             self._send_request(
                 dbkl_url,
                 indata,
@@ -333,9 +332,6 @@ class MainHTTPURLThread(threading.Thread):
                     self.packet_logger.debug(spec_string)
                     self.simple_packet_logger.debug(spec_string)
 
-                    # Fan-out is deliberate. Each destination is attempted
-                    # independently so one failing endpoint cannot suppress the
-                    # other delivery path.
                     self._send_primary_rest(indata, node_id)
                     self._send_dbkl_https(indata, node_id)
                 finally:
