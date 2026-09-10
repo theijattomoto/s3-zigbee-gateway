@@ -22,7 +22,9 @@ import os
 import ssl
 import threading
 import time
-import urllib
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from .config import auth_key_pair, cert_location
 
