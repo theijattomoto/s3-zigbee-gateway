@@ -1,0 +1,13 @@
+/home/pi/S3Gateway/log/gateway.log
+/home/pi/S3Gateway/log/error.log
+/home/pi/S3Gateway/log/mqtt.log {
+    daily
+    missingok
+    notifempty
+    rotate 365
+    dateext
+    dateformat .%Y-%m-%d
+    nocompress
+    copytruncate
+    su pi s3gw
+}
