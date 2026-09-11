@@ -1,0 +1,7 @@
+[Unit]
+Description=S3 Gateway log retention maintenance
+
+[Service]
+Type=oneshot
+Environment=GATEWAY_LOG_DIR=/home/pi/S3Gateway/log
+ExecStart=/usr/local/sbin/s3-gateway-log-maintenance
