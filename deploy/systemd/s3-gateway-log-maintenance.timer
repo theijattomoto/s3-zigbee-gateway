@@ -1,0 +1,11 @@
+[Unit]
+Description=Run S3 Gateway log retention maintenance daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+Unit=s3-gateway-log-maintenance.service
+
+[Install]
+WantedBy=timers.target
