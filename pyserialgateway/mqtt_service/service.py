@@ -2,7 +2,7 @@
 
 import json
 import logging
-from logging.handlers import RotatingFileHandler
+from logging import FileHandler
 import os
 import queue
 import ssl
@@ -22,7 +22,12 @@ _LOG = logging.getLogger("S3MQTT")
 
 
 def _configure_mqtt_file_logging(config: MQTTConfig) -> None:
-    """Attach one dedicated rotating file handler to the S3MQTT logger."""
+    """Attach one dedicated file handler to the S3MQTT logger.
+
+    File rotation is intentionally owned by the host logrotate policy so the
+    application has a single writer lifecycle and all gateway logs share the
+    same daily retention rules.
+    """
     log_path = os.path.abspath(config.log_file)
     log_dir = os.path.dirname(log_path)
     if log_dir:
@@ -32,12 +37,7 @@ def _configure_mqtt_file_logging(config: MQTTConfig) -> None:
         if getattr(handler, "_s3_mqtt_log_path", None) == log_path:
             return
 
-    handler = RotatingFileHandler(
-        log_path,
-        maxBytes=config.log_max_bytes,
-        backupCount=config.log_backup_count,
-        encoding="utf-8",
-    )
+    handler = FileHandler(log_path, encoding="utf-8")
     handler._s3_mqtt_log_path = log_path
     handler.setLevel(logging.INFO)
     handler.setFormatter(
@@ -298,7 +298,6 @@ class MQTTService:
             self.topics.node_command(),
         )
 
-        # Publish retained online status before allowing queued gateway events to flow.
         if not self._publish_gateway_status("online"):
             _LOG.warning("MQTT connection not marked ready because online status update failed")
             return
