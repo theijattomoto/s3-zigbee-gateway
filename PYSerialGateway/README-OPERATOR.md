@@ -10,6 +10,8 @@ The normal site operator works only from:
 
 - `samplelist.csv` - complete site node inventory.
 - `pygw_conf.py` - site gateway configuration, including gateway node ID, PAN ID and Zigbee channel.
+- `log/` - gateway, MQTT and error logs.
+- `GPSlog/` - daily GPS scan KML files that can be copied or opened in Google Earth.
 - `README-OPERATOR.md` - this guide.
 
 Do not edit files directly under `/opt/s3-gateway/app/` during normal operation. The DBUP command copies the validated operator files into the protected runtime.
@@ -115,25 +117,56 @@ sudo -u s3gw psql -d "serial-gateway-program" -c \
 
 ## Check gateway logs
 
+Gateway:
+
 ```bash
-sudo tail -n 50 /opt/s3-gateway/app/PYSerialGateway/log/gateway.log
+tail -n 50 ~/S3Gateway/log/gateway.log
 ```
 
 MQTT:
 
 ```bash
-sudo tail -n 30 /opt/s3-gateway/app/PYSerialGateway/log/mqtt.log
+tail -n 30 ~/S3Gateway/log/mqtt.log
 ```
 
 Errors:
 
 ```bash
-sudo tail -n 50 /opt/s3-gateway/app/PYSerialGateway/errorlog/error.log
+tail -n 50 ~/S3Gateway/log/error.log
+```
+
+## Retrieve GPS logs
+
+Daily GPS scans are stored as KML files under:
+
+```text
+~/S3Gateway/GPSlog/
+```
+
+List available scans:
+
+```bash
+ls -lh ~/S3Gateway/GPSlog/
+```
+
+Show the newest GPS scan:
+
+```bash
+ls -1t ~/S3Gateway/GPSlog/*_GPSscan.kml | head -1
+```
+
+The KML files can be copied from the gateway and opened directly in Google Earth.
+
+GPS mapping is generated only when the gateway runtime is started with the `GPSUP` option. Check the running service command if GPS scans are not being generated:
+
+```bash
+sudo systemctl cat s3-zigbee-gateway | grep -E 'ExecStart|GPSUP'
 ```
 
 ## Operator rules
 
 - Normal edits are made only in `~/S3Gateway/samplelist.csv` and `~/S3Gateway/pygw_conf.py`.
+- Operational logs and GPS KML files are read from `~/S3Gateway/log/` and `~/S3Gateway/GPSlog/`.
 - Always keep `samplelist.csv` as the complete desired site inventory.
 - Run `sudo s3-gateway-dbup` after node or gateway network changes.
 - Do not run `DBUP` or `DBUP_ONLY` manually while the production service is active.
