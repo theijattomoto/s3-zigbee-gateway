@@ -61,9 +61,8 @@ if [ ! -x "$TARGET_DIR/.venv/bin/python" ]; then
     exit 1
 fi
 
-# Seed the operator-facing files from the current production runtime once.
-# This preserves existing site-specific PAN/channel values instead of
-# copying repository defaults into the operator workspace.
+# Seed operator-editable site files from production only when absent. The
+# operator guide is deployment-managed and is refreshed on every deployment.
 install -d -o pi -g pi -m 755 "$OPERATOR_DIR"
 if [ ! -f "$OPERATOR_DIR/samplelist.csv" ] && [ -f "$TARGET_DIR/PYSerialGateway/samplelist.csv" ]; then
     install -o pi -g pi -m 644 "$TARGET_DIR/PYSerialGateway/samplelist.csv" "$OPERATOR_DIR/samplelist.csv"
@@ -71,7 +70,7 @@ fi
 if [ ! -f "$OPERATOR_DIR/pygw_conf.py" ] && [ -f "$TARGET_DIR/PYSerialGateway/pygw_conf.py" ]; then
     install -o pi -g pi -m 644 "$TARGET_DIR/PYSerialGateway/pygw_conf.py" "$OPERATOR_DIR/pygw_conf.py"
 fi
-if [ ! -f "$OPERATOR_DIR/README-OPERATOR.md" ] && [ -f "$SOURCE_DIR/PYSerialGateway/README-OPERATOR.md" ]; then
+if [ -f "$SOURCE_DIR/PYSerialGateway/README-OPERATOR.md" ]; then
     install -o pi -g pi -m 644 "$SOURCE_DIR/PYSerialGateway/README-OPERATOR.md" "$OPERATOR_DIR/README-OPERATOR.md"
 fi
 
@@ -89,8 +88,7 @@ restore_previous_code() {
     chmod 750 "$TARGET_DIR/PYSerialGateway/run-service.sh" 2>/dev/null || true
     install -d -o s3gw -g s3gw -m 750 \
         "$TARGET_DIR/PYSerialGateway/log" \
-        "$TARGET_DIR/PYSerialGateway/errorlog" \
-        "$TARGET_DIR/PYSerialGateway/GPSlog" 2>/dev/null || true
+        "$TARGET_DIR/PYSerialGateway/errorlog" 2>/dev/null || true
 }
 
 on_exit() {
@@ -130,11 +128,12 @@ rsync -a --delete \
 
 chmod 750 "$TARGET_DIR/PYSerialGateway/run-service.sh"
 
-# Runtime directories remain writable by the service account.
+# Normal runtime log directories remain writable by the service account. GPS
+# is handled separately by setup-operator-gps-access.sh so an existing
+# operator symlink is never converted back into a private runtime directory.
 install -d -o s3gw -g s3gw -m 750 \
     "$TARGET_DIR/PYSerialGateway/log" \
-    "$TARGET_DIR/PYSerialGateway/errorlog" \
-    "$TARGET_DIR/PYSerialGateway/GPSlog"
+    "$TARGET_DIR/PYSerialGateway/errorlog"
 
 # Operator logs are real files in ~/S3Gateway/log. Migrate existing symlinked
 # history once, then let the s3gw service append directly to these files.
@@ -223,6 +222,46 @@ set_env_value MQTT_LOG_FILE "$OPERATOR_LOG_DIR/mqtt.log"
 
 bash -n "$TARGET_DIR/PYSerialGateway/run-service.sh"
 bash -n /usr/local/sbin/s3-gateway-dbup
+bash -n "$SOURCE_DIR/scripts/setup-operator-gps-access.sh"
+bash -n "$SOURCE_DIR/scripts/install-runtime-hardening.sh"
+
+# Reproduce the P0-proven site state while the gateway is stopped: operator
+# GPS access first, then the managed GPSUP/sudo/file-permission hardening.
+echo "Configuring operator GPS access..."
+TARGET_DIR="$TARGET_DIR" OPERATOR_DIR="$OPERATOR_DIR" BACKUP_ROOT="$BACKUP_ROOT" \
+    bash "$SOURCE_DIR/scripts/setup-operator-gps-access.sh"
+
+echo "Applying runtime hardening..."
+TARGET_DIR="$TARGET_DIR" SERVICE_NAME="$SERVICE_NAME" \
+    bash "$SOURCE_DIR/scripts/install-runtime-hardening.sh"
+
+# Deployment assertions: fail closed rather than starting a partially
+# configured gateway that would regress GPS or hardware-reset recovery.
+if [ "$(readlink -f "$TARGET_DIR/PYSerialGateway/GPSlog")" != "$(readlink -f "$OPERATOR_DIR/GPSlog")" ]; then
+    echo "GPS operator path validation failed." >&2
+    exit 1
+fi
+if ! runuser -u s3gw -- test -w "$OPERATOR_DIR/GPSlog"; then
+    echo "GPS operator directory is not writable by s3gw." >&2
+    exit 1
+fi
+if runuser -u s3gw -- test -w "$TARGET_DIR/pyserialgateway/hardware_reset.py"; then
+    echo "Hardware reset script is unexpectedly writable by s3gw." >&2
+    exit 1
+fi
+if runuser -u s3gw -- test -w "$TARGET_DIR/pyserialgateway/config_PYproperties.py"; then
+    echo "Hardware reset configuration is unexpectedly writable by s3gw." >&2
+    exit 1
+fi
+
+resolved_exec="$(systemctl show "$SERVICE_NAME" -p ExecStart --value)"
+case "$resolved_exec" in
+    *"run-service.sh GPSUP"*) ;;
+    *)
+        echo "GPSUP is missing from effective systemd ExecStart: $resolved_exec" >&2
+        exit 1
+        ;;
+esac
 
 echo "Starting $SERVICE_NAME..."
 systemctl start "$SERVICE_NAME"
@@ -232,9 +271,17 @@ if ! systemctl is-active --quiet "$SERVICE_NAME"; then
     exit 1
 fi
 
+# Confirm the process started with GPSUP rather than merely validating the
+# drop-in on disk.
+if ! ps -eo user,args | grep -F "pygw_main.py GPSUP" | grep -q '^s3gw '; then
+    echo "Gateway process did not start with GPSUP." >&2
+    exit 1
+fi
+
 DEPLOY_STARTED=0
 trap - EXIT
 
 echo "Deployment complete."
 echo "Backup: $BACKUP_DIR"
+echo "GPS path: $(readlink -f "$TARGET_DIR/PYSerialGateway/GPSlog")"
 systemctl --no-pager --full status "$SERVICE_NAME" | sed -n '1,12p'
