@@ -1,0 +1,1 @@
+s3gw ALL=(root) NOPASSWD: /usr/bin/python3 /opt/s3-gateway/app/pyserialgateway/hardware_reset.py
