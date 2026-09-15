@@ -15,12 +15,10 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-for cmd in apt-get install rsync setfacl psql runuser systemctl; do
-    command -v "$cmd" >/dev/null 2>&1 || {
-        echo "Missing required command: $cmd" >&2
-        exit 1
-    }
-done
+if ! command -v apt-get >/dev/null 2>&1; then
+    echo "This bootstrap currently supports Raspberry Pi OS/Debian systems with apt-get." >&2
+    exit 1
+fi
 
 if [ ! -f "$SOURCE_DIR/requirements.txt" ] || [ ! -f "$BASE_UNIT" ]; then
     echo "Repository layout not recognized at $SOURCE_DIR" >&2
@@ -33,6 +31,28 @@ if [ -d "$TARGET_DIR" ] && [ -n "$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -p
     exit 1
 fi
 
+echo "Installing required OS packages..."
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y \
+    git \
+    python3 \
+    python3-venv \
+    python3-pip \
+    postgresql \
+    postgresql-client \
+    rsync \
+    acl \
+    sudo \
+    usbutils
+
+for cmd in install rsync setfacl psql runuser systemctl python3; do
+    command -v "$cmd" >/dev/null 2>&1 || {
+        echo "Required command unavailable after package installation: $cmd" >&2
+        exit 1
+    }
+done
+
 if id "$SERVICE_USER" >/dev/null 2>&1; then
     echo "Service account exists: $SERVICE_USER"
 else
@@ -42,6 +62,14 @@ fi
 
 if getent group dialout >/dev/null 2>&1; then
     usermod -a -G dialout "$SERVICE_USER"
+else
+    echo "Required serial-access group 'dialout' is missing." >&2
+    exit 1
+fi
+
+if ! id -nG "$SERVICE_USER" | tr ' ' '\n' | grep -qx dialout; then
+    echo "$SERVICE_USER was not added to dialout successfully." >&2
+    exit 1
 fi
 
 systemctl enable --now postgresql
@@ -110,6 +138,11 @@ fi
 sed -i "s/^DB_USER=.*/DB_USER=${SERVICE_USER}/" "$TARGET_DIR/.env"
 chown root:"$SERVICE_GROUP" "$TARGET_DIR/.env"
 chmod 640 "$TARGET_DIR/.env"
+
+if ! id pi >/dev/null 2>&1; then
+    echo "Required operator account 'pi' does not exist. Create the approved operator account before continuing." >&2
+    exit 1
+fi
 
 install -d -o pi -g pi -m 755 "$OPERATOR_DIR"
 if [ ! -f "$OPERATOR_DIR/samplelist.csv" ]; then
