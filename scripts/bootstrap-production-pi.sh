@@ -8,6 +8,7 @@ SERVICE_USER="${SERVICE_USER:-s3gw}"
 SERVICE_GROUP="${SERVICE_GROUP:-s3gw}"
 SOURCE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BASE_UNIT="$SOURCE_DIR/deploy/systemd/s3-zigbee-gateway.service"
+OPERATOR_CONFIG="${S3_OPERATOR_CONFIG:-/etc/s3-gateway/operator.conf}"
 
 # Use an explicitly supplied operator account when provided. Otherwise use the
 # non-root account that invoked sudo (works for both Raspberry Pi 'pi' and
@@ -200,6 +201,18 @@ if [ ! -f "$OPERATOR_DIR/pygw_conf.py" ]; then
     install -o "$OPERATOR_USER" -g "$OPERATOR_GROUP" -m 644 "$TARGET_DIR/PYSerialGateway/pygw_conf.py" "$OPERATOR_DIR/pygw_conf.py"
 fi
 
+# Persist only non-secret operator identity/path data so every downstream
+# deployment helper resolves the same workspace on Raspberry Pi and Rock 3C.
+install -d -o root -g root -m 755 "$(dirname "$OPERATOR_CONFIG")"
+cat > "$OPERATOR_CONFIG" <<EOF
+S3_OPERATOR_USER=$OPERATOR_USER
+S3_OPERATOR_GROUP=$OPERATOR_GROUP
+S3_OPERATOR_HOME=$OPERATOR_HOME
+S3_OPERATOR_DIR=$OPERATOR_DIR
+EOF
+chown root:root "$OPERATOR_CONFIG"
+chmod 644 "$OPERATOR_CONFIG"
+
 install -o root -g root -m 644 "$BASE_UNIT" "/etc/systemd/system/${SERVICE_NAME}.service"
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
@@ -209,6 +222,7 @@ Fresh gateway bootstrap preparation complete.
 
 Operator account : $OPERATOR_USER
 Operator workspace: $OPERATOR_DIR
+Operator config   : $OPERATOR_CONFIG
 
 NEXT REQUIRED STEPS:
 1. Edit production secrets/settings:
