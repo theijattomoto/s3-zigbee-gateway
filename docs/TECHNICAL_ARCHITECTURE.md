@@ -12,13 +12,11 @@ For operations and provisioning, use the role-specific handover SOPs instead.
 flowchart LR
     N[S3 Zigbee Nodes] <-->|Zigbee| Z[USB Zigbee Gateway]
     Z <-->|USB Serial| P[Raspberry Pi Gateway App]
-
     P --> DB[(PostgreSQL)]
     P --> HTTP[Legacy HTTP / SELMOS]
     P --> MQTT[MQTT Broker]
     P --> GPS[GPS KML]
     P --> REST[REST Control :9090]
-
     MQTT --> LV[Light Vision / IoT Ingestion]
 ```
 
@@ -81,19 +79,14 @@ flowchart TD
     B -->|G0| C[GPSThread]
     B -->|P0| D[TimetableThread]
     B -->|H1/H2/E1/E2/E4| E[RecoveryThread]
-
     C --> F[GPSDatabaseThread]
     E --> G[DatabaseThread]
-
     F --> DB[(node_database)]
     G --> DB2[(filter_time_py)]
-
     G --> H[HTTP queue]
     H --> I[Legacy HTTP / SELMOS]
     H --> J[MQTT mirror]
 ```
-
-### Recovery path
 
 For normal non-GPS/non-timetable packets:
 
@@ -128,17 +121,7 @@ flowchart LR
     S --> Z[USB Zigbee Gateway]
 ```
 
-Polling behavior is driven by site timing values from `PYSerialGateway/pygw_conf.py`, including:
-
-- `cycletime`
-- `pollinggap`
-- `active_time`
-- `inactive_time`
-- `LM_active_time`
-- `node_off_time`
-- `GPS_poll_time`
-- `aggressive_poll_duration_mins`
-- `minimum_power`
+Polling behavior is driven by site timing values in `PYSerialGateway/pygw_conf.py`.
 
 ---
 
@@ -146,9 +129,7 @@ Polling behavior is driven by site timing values from `PYSerialGateway/pygw_conf
 
 ### `node_database`
 
-Stores the known site inventory and GPS information.
-
-Key fields:
+Stores site inventory and GPS information:
 
 ```text
 pole_node
@@ -160,11 +141,11 @@ longitude
 description
 ```
 
-The active polling list is selected according to the current gateway PAN ID and channel.
+Active polling uses the current gateway PAN ID and channel.
 
 ### `filter_time_py`
 
-Stores recent packet state per node/packet type:
+Stores packet state:
 
 ```text
 node
@@ -179,7 +160,7 @@ override_flag
 lamp_status
 ```
 
-`DatabaseThread` uses message-ID comparison to distinguish new packets, duplicates, out-of-order packets and rollover.
+`DatabaseThread` distinguishes new packets, duplicates, out-of-order packets and rollover.
 
 ---
 
@@ -194,19 +175,19 @@ flowchart LR
     P --> R[Restart gateway]
 ```
 
-Project Team must use:
+Project Team uses:
 
 ```bash
 sudo s3-gateway-dbup
 ```
 
-rather than launching `DBUP`/`DBUP_ONLY` manually against a running production service.
+rather than launching DBUP modes manually against a running production service.
 
 ---
 
 ## REST control API
 
-The legacy REST server listens on port `9090`.
+Legacy REST control listens on port `9090`.
 
 | Function | Route | Serial command |
 |---|---|---|
@@ -219,7 +200,7 @@ The legacy REST server listens on port `9090`.
 | Dim | `/gateway-serial-listener/dim-node/<nodes>` | `+LCD` |
 | Dim level | `/gateway-serial-listener/dim-level-node/<level>/<nodes>` | `+LC<level>` |
 
-Timetable verification is handled internally through `P0` processing and `+STQ...` queries. A public Set Timetable / Set Active Profile API is not part of the current handover baseline.
+Timetable verification is handled internally through `P0` processing and `+STQ...` queries. Public Set Timetable / Set Active Profile APIs are outside the current handover baseline.
 
 ---
 
@@ -237,15 +218,11 @@ MQTTService background publisher
 Gateway-scoped MQTT topic
 ```
 
-Important property: MQTT mirroring is isolated from the legacy HTTP queue. A mirroring exception is logged but does not prevent the existing HTTP path from receiving the packet.
-
-The regression suite explicitly tests this failure-isolation behavior.
+MQTT mirroring is isolated from the legacy HTTP queue. A mirroring exception is logged but does not prevent the existing HTTP path from receiving the packet.
 
 ---
 
 ## GPS mapping
-
-`GPSUP` enables GPS polling during the configured window.
 
 ```text
 G0 packet
@@ -261,19 +238,17 @@ KMLMapManager
 /home/pi/S3Gateway/GPSlog/*.kml
 ```
 
-The protected legacy runtime path:
+Runtime GPS path:
 
 ```text
 /opt/s3-gateway/app/PYSerialGateway/GPSlog
 ```
 
-is mapped to:
+Operator path:
 
 ```text
 /home/pi/S3Gateway/GPSlog
 ```
-
-for operator access.
 
 ---
 
@@ -288,25 +263,23 @@ for operator access.
 5. Applies the configured gateway/PAN/channel tuple.
 6. Keeps the first usable configured port.
 
-Current architecture therefore supports one active serial gateway per process. Multi-USB/multi-channel simultaneous operation remains future work.
+Current architecture supports one active serial gateway per process.
 
 ---
 
 ## Hardware reset recovery
 
-The gateway may invoke:
+Approved privileged command:
 
 ```text
 /usr/bin/python3 /opt/s3-gateway/app/pyserialgateway/hardware_reset.py
 ```
 
-through a restricted sudo rule.
-
-Production protection requirements:
+Production requirements:
 
 - service runs as `s3gw`;
 - no broad `NOPASSWD: ALL`;
-- only the approved hardware-reset command is allowed;
+- only the approved reset command is allowed;
 - reset script/config are not writable by `s3gw`;
 - privileged code path is root-owned.
 
@@ -320,15 +293,6 @@ Production protection requirements:
 /opt/s3-gateway/backups/       deployment backups
 ```
 
-Operator-facing files:
-
-```text
-/home/pi/S3Gateway/samplelist.csv
-/home/pi/S3Gateway/pygw_conf.py
-/home/pi/S3Gateway/log/
-/home/pi/S3Gateway/GPSlog/
-```
-
 ---
 
 ## Production systemd model
@@ -339,12 +303,12 @@ Base service:
 deploy/systemd/s3-zigbee-gateway.service
 ```
 
-Production characteristics:
+Characteristics:
 
 - `User=s3gw`
 - `Group=s3gw`
 - `SupplementaryGroups=dialout`
-- environment loaded from `/opt/s3-gateway/app/.env`
+- environment from `/opt/s3-gateway/app/.env`
 - launcher `/opt/s3-gateway/app/PYSerialGateway/run-service.sh`
 - GPSUP supplied by the managed drop-in
 - automatic restart on failure
@@ -357,7 +321,7 @@ Production characteristics:
 |---|---|
 | `GPSUP` | Enable GPS mapping polling |
 | `DBUP` | Synchronize node CSV during startup |
-| `DBUP_ONLY` | Synchronize DB then exit before normal runtime |
+| `DBUP_ONLY` | Synchronize DB then exit |
 | `DEMOUP` | Disable autonomous recovery actions |
 | `NOPOLL` | Disable active polling |
 | `NOSELMOS` | Disable upstream HTTP delivery |
@@ -382,14 +346,14 @@ Full suite:
   -m unittest discover -s tests -v
 ```
 
-Current validated reference:
+Validated reference:
 
 ```text
 Ran 48 tests
 OK
 ```
 
-The MQTT failure-isolation test intentionally emits a mocked `RuntimeError: mqtt unavailable`; it is expected when the test still ends in `ok` and the suite ends `OK`. fileciteturn146file0L48-L124
+The MQTT failure-isolation test intentionally emits a mocked `RuntimeError: mqtt unavailable`; it is expected when that individual test ends in `ok` and the full suite ends in `OK`.
 
 ---
 
