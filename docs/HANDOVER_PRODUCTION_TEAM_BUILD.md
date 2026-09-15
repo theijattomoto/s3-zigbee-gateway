@@ -1,61 +1,64 @@
-# S3 Zigbee Gateway — Production Team Build & Provisioning Handover
+# S3 Zigbee Gateway — Production Build & Provisioning
 
-## Purpose
+Use this SOP to build a **new or replacement gateway from a blank Raspberry Pi** and deliver it ready for Project Team operation.
 
-This SOP is for the Production Team that prepares a new S3 Zigbee Gateway from a blank Raspberry Pi and hands over a validated unit to the Project Team.
-
-Production Team scope:
-
-1. Install and prepare Raspberry Pi OS.
-2. Create the required OS/service accounts and permissions.
-3. Install system dependencies and PostgreSQL.
-4. Obtain the approved gateway application source.
-5. Create the Python virtual environment and install requirements.
-6. Prepare the production runtime under `/opt/s3-gateway/app`.
-7. Configure the site node list, gateway PAN/channel, environment and MQTT settings.
-8. Install systemd/runtime hardening/log retention/operator access.
-9. Connect the Zigbee USB gateway.
-10. Validate the completed unit before handover.
-
-The Production Team does **not** modify application source code. Code changes remain an IoT/Development responsibility.
+Production Team owns build/provisioning. Application feature changes remain an IoT / Development responsibility.
 
 ---
 
-## 1. Required inputs before production starts
+## Production flow
 
-Production must receive the following approved inputs:
-
-- Raspberry Pi hardware and power supply.
-- microSD/storage media.
-- approved Raspberry Pi OS image/version.
-- approved Git repository and branch/tag/commit.
-- site `samplelist.csv`.
-- site `pygw_conf.py` values.
-- production `.env` values, including MQTT endpoint and credentials.
-- required encrypted `required-<site>gw.zip` configuration bundle.
-- Zigbee USB gateway hardware.
-- gateway node ID, PAN ID and Zigbee channel.
-
-Do not substitute development credentials or test broker settings into a production unit.
+```mermaid
+flowchart TD
+    A[Approved Raspberry Pi OS] --> B[Clone approved source]
+    B --> C[bootstrap-production-pi.sh]
+    C --> D[Configure production .env]
+    D --> E[Install approved site files]
+    E --> F[deploy-production.sh]
+    F --> G[install-log-retention.sh]
+    G --> H[s3-gateway-dbup]
+    H --> I[validate-handover.sh]
+    I --> J[Controlled reboot]
+    J --> K[validate-handover.sh again]
+    K --> L[Ready for Project Team]
+```
 
 ---
 
-## 2. Install Raspberry Pi OS
+## Required inputs
 
-Install the approved Raspberry Pi OS using the normal Production Team imaging process.
+Production must receive:
 
-Minimum expected state after first boot:
+| Input | Required |
+|---|---|
+| Raspberry Pi + approved power/storage | Yes |
+| Approved Raspberry Pi OS image/version | Yes |
+| Approved Git repository + exact commit/tag | Yes |
+| Site `samplelist.csv` | Yes |
+| Site `pygw_conf.py` values | Yes |
+| Production `.env` values | Yes |
+| Encrypted `required-<site>gw.zip` bundle | Yes |
+| Zigbee USB gateway | Yes |
+| Gateway node ID / PAN ID / channel | Yes |
+
+Do not use development credentials or test broker settings in a production unit.
+
+---
+
+## 1. Prepare Raspberry Pi OS
+
+Minimum expected state:
 
 ```text
 hostname configured
-network connectivity available
-SSH enabled if required by deployment policy
-system clock/timezone correct
+network available
+SSH configured per company policy
+correct timezone/system clock
 package manager working
 pi operator account available
 ```
 
-Recommended checks:
+Check:
 
 ```bash
 hostnamectl
@@ -64,169 +67,18 @@ ip route
 timedatectl
 ```
 
-Update package metadata before application installation:
+Update the OS:
 
 ```bash
 sudo apt update
 sudo apt upgrade -y
 ```
 
-Reboot if the OS/kernel update requires it:
-
-```bash
-sudo reboot
-```
+Reboot if required.
 
 ---
 
-## 3. Install required OS packages
-
-The gateway requires Python, PostgreSQL, Git and several deployment utilities.
-
-Install:
-
-```bash
-sudo apt install -y \
-  git \
-  python3 \
-  python3-venv \
-  python3-pip \
-  postgresql \
-  postgresql-client \
-  rsync \
-  acl \
-  sudo \
-  usbutils
-```
-
-Verify:
-
-```bash
-python3 --version
-git --version
-psql --version
-rsync --version | head -1
-setfacl --version
-lsusb --version
-```
-
----
-
-## 4. Create the gateway service account
-
-The production service runs as the dedicated account:
-
-```text
-s3gw
-```
-
-Create it if it does not already exist:
-
-```bash
-id s3gw >/dev/null 2>&1 || \
-  sudo useradd --system --create-home --shell /usr/sbin/nologin s3gw
-```
-
-Confirm:
-
-```bash
-id s3gw
-```
-
-Do not run the production gateway service as root.
-
----
-
-## 5. Prepare PostgreSQL
-
-Start and enable PostgreSQL:
-
-```bash
-sudo systemctl enable --now postgresql
-sudo systemctl is-active postgresql
-```
-
-The current production runtime uses `DB_USER=s3gw`. Create a PostgreSQL role for the service account if required:
-
-```bash
-sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='s3gw'" | grep -q 1 || \
-sudo -u postgres createuser s3gw
-```
-
-Create the production database only on a **new gateway**. Do not recreate an existing production database during upgrade/repair work.
-
-The repository `create_db.sql` is a baseline schema reference. It was originally written with database owner `pi`, so do not blindly execute it unchanged for the hardened `s3gw` production model.
-
-For a new gateway, create the database owned by `s3gw`:
-
-```bash
-sudo -u postgres psql <<'SQL'
-CREATE DATABASE "serial-gateway-program" OWNER s3gw;
-SQL
-```
-
-Then create the required schema:
-
-```bash
-sudo -u postgres psql -d "serial-gateway-program" <<'SQL'
-CREATE TABLE node_database (
-    id          SERIAL PRIMARY KEY,
-    pole_node   TEXT,
-    node        TEXT NOT NULL,
-    pan_id      TEXT,
-    channel     TEXT,
-    latitude    TEXT,
-    longitude   TEXT,
-    description TEXT
-);
-
-CREATE INDEX idx_node_database_node
-    ON node_database (node);
-CREATE INDEX idx_node_database_pan_channel
-    ON node_database (pan_id, channel);
-
-CREATE TABLE filter_time_py (
-    id              SERIAL PRIMARY KEY,
-    node            TEXT NOT NULL,
-    ack             TEXT NOT NULL,
-    dtime           TIMESTAMP,
-    msgid           TEXT,
-    oo_msgid        TEXT,
-    dec_count       INTEGER DEFAULT 0,
-    rollover_count  INTEGER DEFAULT 0,
-    miss_count      INTEGER DEFAULT 0,
-    override_flag   BOOLEAN,
-    lamp_status     BOOLEAN
-);
-
-CREATE INDEX idx_filter_time_py_node_ack
-    ON filter_time_py (node, ack);
-
-ALTER TABLE node_database OWNER TO s3gw;
-ALTER TABLE filter_time_py OWNER TO s3gw;
-ALTER SEQUENCE node_database_id_seq OWNER TO s3gw;
-ALTER SEQUENCE filter_time_py_id_seq OWNER TO s3gw;
-SQL
-```
-
-Verify peer access as the service account:
-
-```bash
-sudo -u s3gw psql -d "serial-gateway-program" -c '\dt'
-```
-
-Expected tables:
-
-```text
-node_database
-filter_time_py
-```
-
----
-
-## 6. Obtain the approved source
-
-Use only the approved production branch/tag/commit supplied by IoT/Development.
+## 2. Obtain the approved source
 
 Example:
 
@@ -238,97 +90,66 @@ git clone git@github.com:theijattomoto/s3-zigbee-gateway.git
 cd s3-zigbee-gateway
 
 git fetch origin
-git checkout feature/daily-log-retention
-git pull origin feature/daily-log-retention
+git checkout <approved-branch-or-tag>
+git pull
 ```
 
-Record the exact source revision used for the unit:
+Record the exact revision:
 
 ```bash
 git status
 git log -1 --oneline
-```
-
-Do not deploy with an uncommitted working tree:
-
-```bash
 git status --porcelain
 ```
 
-Expected output: empty.
+Expected `git status --porcelain`: empty.
 
 ---
 
-## 7. Prepare the production runtime
+## 3. Run fresh-Pi bootstrap
 
-Create the runtime root:
-
-```bash
-sudo install -d -o root -g s3gw -m 755 /opt/s3-gateway
-sudo install -d -o root -g s3gw -m 755 /opt/s3-gateway/app
-sudo install -d -o root -g root -m 755 /opt/s3-gateway/backups
-```
-
-Copy the approved source into the initial runtime:
+For a blank/new Raspberry Pi:
 
 ```bash
 cd ~/gateway-build/s3-zigbee-gateway
-
-sudo rsync -a --delete \
-  --exclude=.git/ \
-  ./ /opt/s3-gateway/app/
+sudo bash scripts/bootstrap-production-pi.sh
 ```
 
-Set initial ownership:
+The bootstrap prepares:
 
-```bash
-sudo chown -R root:s3gw /opt/s3-gateway/app
+```text
+OS packages
+  ↓
+s3gw service account + dialout access
+  ↓
+PostgreSQL role/database/schema
+  ↓
+/opt/s3-gateway/app
+  ↓
+Python .venv + requirements
+  ↓
+base .env
+  ↓
+operator workspace seed
+  ↓
+base systemd service
 ```
+
+The script intentionally refuses a populated `/opt/s3-gateway/app` so it cannot be used accidentally as an upgrade tool.
+
+For an **existing gateway**, use `scripts/deploy-production.sh` instead.
 
 ---
 
-## 8. Create the production Python environment
+## 4. Configure production `.env`
 
-Create the virtual environment in the protected runtime:
-
-```bash
-sudo python3 -m venv /opt/s3-gateway/app/.venv
-sudo /opt/s3-gateway/app/.venv/bin/pip install --upgrade pip
-sudo /opt/s3-gateway/app/.venv/bin/pip install \
-  -r /opt/s3-gateway/app/requirements.txt
-```
-
-Verify the important production imports:
-
-```bash
-/opt/s3-gateway/app/.venv/bin/python - <<'PY'
-import psycopg2
-import paho.mqtt.client
-import serial
-import flask
-print('Python dependency check: PASS')
-print('psycopg2:', psycopg2.__version__)
-PY
-```
-
----
-
-## 9. Create the production environment file
-
-Create from the repository example:
-
-```bash
-sudo cp /opt/s3-gateway/app/.env.example \
-  /opt/s3-gateway/app/.env
-```
-
-Edit the production values:
+Edit:
 
 ```bash
 sudo nano /opt/s3-gateway/app/.env
 ```
 
-Minimum settings requiring production review include:
+Review at minimum:
 
 ```text
 DB_USER=s3gw
@@ -337,8 +158,8 @@ MQTT_BROKER=<production broker>
 MQTT_PORT=<production port>
 MQTT_USERNAME=<approved username>
 MQTT_PASSWORD=<approved password>
-MQTT_TLS=<true/false per approved architecture>
-MQTT_CA_CERT=<approved CA file when TLS is enabled>
+MQTT_TLS=<approved value>
+MQTT_CA_CERT=<approved CA path when required>
 MQTT_TOPIC_ROOT=s3/zigbee
 GATEWAY_ID=<unique gateway ID>
 MQTT_LOG_FILE=/home/pi/S3Gateway/log/mqtt.log
@@ -346,127 +167,82 @@ GATEWAY_LOG_DIR=/home/pi/S3Gateway/log
 GATEWAY_ERROR_LOG_DIR=/home/pi/S3Gateway/log
 ```
 
-Protect the file:
+Protect it:
 
 ```bash
 sudo chown root:s3gw /opt/s3-gateway/app/.env
 sudo chmod 640 /opt/s3-gateway/app/.env
 ```
 
-Never commit production passwords, certificates or secrets into Git.
+Never commit production secrets into Git.
 
 ---
 
-## 10. Install site-specific configuration
+## 5. Install approved site configuration
 
-Place the approved complete site node list at:
-
-```text
-/opt/s3-gateway/app/PYSerialGateway/samplelist.csv
-```
-
-Place the approved gateway configuration at:
+Project Team working copies are stored under:
 
 ```text
-/opt/s3-gateway/app/PYSerialGateway/pygw_conf.py
+/home/pi/S3Gateway/
 ```
 
-The important gateway tuple format is:
+Install/replace the approved files:
+
+```text
+/home/pi/S3Gateway/samplelist.csv
+/home/pi/S3Gateway/pygw_conf.py
+```
+
+Gateway network tuple format:
 
 ```python
 first_GW_data = ('FE01', '1001', '11')
 second_GW_data = ('FE02', '1001', '11')
 ```
 
-Format:
+Meaning:
 
 ```text
 (gateway_node_id, pan_id, channel)
 ```
 
-Also confirm the required encrypted site gateway bundle exists under:
+Confirm the matching encrypted bundle exists in the application package:
 
 ```text
 /opt/s3-gateway/app/pyserialgateway/required-<site>gw.zip
 ```
 
-The `cert_codename` in `pygw_conf.py` must match that bundle name.
+`cert_codename` in `pygw_conf.py` must match the bundle naming.
 
 ---
 
-## 11. Install the systemd service
+## 6. Deploy the production runtime
 
-The current repository manages the GPSUP **drop-in**, but the base systemd unit is still an installation prerequisite.
-
-Create:
-
-```bash
-sudo tee /etc/systemd/system/s3-zigbee-gateway.service >/dev/null <<'EOF'
-[Unit]
-Description=S3 Zigbee Gateway
-After=network-online.target postgresql.service
-Wants=network-online.target
-Requires=postgresql.service
-
-[Service]
-Type=simple
-User=s3gw
-Group=s3gw
-WorkingDirectory=/opt/s3-gateway/app/PYSerialGateway
-EnvironmentFile=/opt/s3-gateway/app/.env
-ExecStart=/opt/s3-gateway/app/PYSerialGateway/run-service.sh
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-```
-
-Reload systemd:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable s3-zigbee-gateway
-```
-
-Do not start it yet; complete hardening and site setup first.
-
----
-
-## 12. Run the approved deployment setup
-
-Once `/opt/s3-gateway/app`, `.venv`, `.env` and the base systemd service exist, use the repository's deployment script to install the managed runtime state:
+Run:
 
 ```bash
 cd ~/gateway-build/s3-zigbee-gateway
 sudo ./scripts/deploy-production.sh
 ```
 
-This deployment path is responsible for:
+This deployment path manages:
 
-- refreshing deploy-managed application code;
-- preserving `.env`, `.venv`, site node list and site configuration;
-- creating/refreshing the Project Team operator workspace;
-- installing `s3-gateway-dbup`;
-- configuring operator-facing logs;
-- configuring GPS operator access;
-- installing the GPSUP systemd drop-in;
-- installing the restricted hardware-reset sudo rule;
-- protecting the privileged reset code path;
-- validating required runtime state;
-- starting the gateway and verifying that it is active.
+- deploy-managed application code;
+- operator workspace/log permissions;
+- `s3-gateway-dbup` installation;
+- GPS operator access;
+- `GPSUP` systemd override;
+- restricted hardware-reset sudo rule;
+- privileged reset-path protection;
+- startup assertions and rollback behavior.
 
-If deployment aborts, do not repeatedly rerun it without reviewing the reported failure.
+Do not repeatedly rerun a failed deployment without reviewing the reported cause.
 
 ---
 
-## 13. Install log retention
-
-Install the repository-managed log retention components:
+## 7. Install log retention
 
 ```bash
-cd ~/gateway-build/s3-zigbee-gateway
 sudo bash scripts/install-log-retention.sh
 ```
 
@@ -486,15 +262,9 @@ active
 
 ---
 
-## 14. Initialize the node database using DBUP
+## 8. Load the site node database
 
-After deployment, the Project Team operator files are available under:
-
-```text
-/home/pi/S3Gateway/
-```
-
-Install/verify the approved `samplelist.csv` and `pygw_conf.py` there, then run:
+Run only the approved wrapper:
 
 ```bash
 sudo s3-gateway-dbup
@@ -509,71 +279,38 @@ sudo -u s3gw psql -d "serial-gateway-program" -c \
 
 ---
 
-## 15. Connect the Zigbee USB gateway
-
-Connect the approved CP210x-based Zigbee gateway.
-
-Verify USB detection:
+## 9. Connect and verify Zigbee USB hardware
 
 ```bash
 lsusb | grep -i 'CP210'
 ls -l /dev/ttyUSB*
 ```
 
-The current production architecture operates one active Zigbee USB gateway per running gateway process. Simultaneous dual-channel operation is future development and is outside the handover baseline.
+The managed systemd unit runs as `s3gw` with `dialout` serial access.
+
+Current handover baseline: **one active Zigbee USB gateway per running process**. Multi-USB/multi-channel support is deferred.
 
 ---
 
-## 16. Production validation
-
-Run:
+## 10. Run acceptance validation
 
 ```bash
-echo "=== S3 PRODUCTION VALIDATION ==="
-
-sudo systemctl is-enabled s3-zigbee-gateway
-sudo systemctl is-active s3-zigbee-gateway
-ps -ef | grep '[p]ygw_main.py'
-sudo systemctl show s3-zigbee-gateway -p ExecStart
-
-readlink -f /opt/s3-gateway/app/PYSerialGateway/GPSlog
-sudo -u s3gw test -w /home/pi/S3Gateway/GPSlog \
-  && echo "GPS write PASS" \
-  || echo "GPS write FAIL"
-
-sudo visudo -cf /etc/sudoers.d/s3-gateway-hwreset
-
-sudo -u s3gw test -w /opt/s3-gateway/app/pyserialgateway/hardware_reset.py \
-  && echo "FAIL reset script writable" \
-  || echo "PASS reset script protected"
-
-systemctl is-active s3-gateway-log-maintenance.timer
-lsusb | grep -i 'CP210'
-
-tail -n 30 /home/pi/S3Gateway/log/gateway.log
-tail -n 30 /home/pi/S3Gateway/log/mqtt.log
+sudo bash scripts/validate-handover.sh
 ```
 
-Target state:
+Required result:
 
 ```text
-s3-zigbee-gateway enabled
-s3-zigbee-gateway active
-pygw_main.py GPSUP
-GPS path -> /home/pi/S3Gateway/GPSlog
-GPS write PASS
-sudoers validation PASS
-reset script protected
-log-maintenance timer active
-CP210x detected
-MQTT broker connected / transport ready
+HANDOVER RESULT: PASS
 ```
+
+The script verifies service state, GPSUP, operator paths, runtime protection, restricted sudo, PostgreSQL, USB hardware, maintenance timer and MQTT evidence.
 
 ---
 
-## 17. Controlled reboot acceptance
+## 11. Controlled reboot acceptance
 
-Reboot the completed unit:
+Reboot:
 
 ```bash
 sudo reboot
@@ -588,60 +325,99 @@ ps -ef | grep '[p]ygw_main.py'
 systemctl is-active s3-gateway-log-maintenance.timer
 ```
 
-The unit is not ready for handover if the gateway does not recover automatically after reboot.
+Then rerun:
+
+```bash
+cd ~/gateway-build/s3-zigbee-gateway
+sudo bash scripts/validate-handover.sh
+```
+
+The unit is not ready for delivery unless automatic recovery passes after reboot.
 
 ---
 
-## 18. Production handover package
+## 12. Production test suite
 
-Production Team must provide the Project Team with:
+### Handover assets
+
+```bash
+/opt/s3-gateway/app/.venv/bin/python \
+  -m unittest tests.test_handover_assets -v
+```
+
+Expected validated reference:
+
+```text
+Ran 7 tests
+OK
+```
+
+### Full regression suite
+
+```bash
+/opt/s3-gateway/app/.venv/bin/python \
+  -m unittest discover -s tests -v
+```
+
+Current validated reference:
+
+```text
+Ran 48 tests
+OK
+```
+
+The MQTT failure-isolation test intentionally emits a mocked `RuntimeError: mqtt unavailable`; the test is successful when it still ends in `ok` and the suite finishes `OK`. fileciteturn146file0L48-L124
+
+---
+
+## Production handover package
+
+Production Team must deliver:
 
 - completed Raspberry Pi gateway hardware;
 - configured Zigbee USB gateway;
+- approved source revision recorded;
 - site node inventory loaded;
-- site PAN/channel configuration loaded;
-- service enabled and running;
+- PAN/channel configuration loaded;
+- production service enabled and running;
 - MQTT connectivity validated;
 - GPSUP validated;
 - log maintenance validated;
-- Project Team operator directory available;
-- `README-OPERATOR.md` available in `/home/pi/S3Gateway/`;
-- source revision/commit recorded on the production build record.
+- runtime hardening validated;
+- `/home/pi/S3Gateway/` ready for Project Team use;
+- `README-OPERATOR.md` present.
 
-Do **not** hand over production secrets in an unsecured document.
-
----
-
-## 19. Handover acceptance — Production Team
-
-The Production Team handover is accepted when the technician can independently demonstrate:
-
-- [ ] Image/install the approved Raspberry Pi OS.
-- [ ] Configure network/time/SSH according to company deployment policy.
-- [ ] Install required OS packages.
-- [ ] Create/verify the `s3gw` service account.
-- [ ] Install and initialize PostgreSQL for a new unit.
-- [ ] Obtain the approved Git source revision.
-- [ ] Build the production Python `.venv`.
-- [ ] Configure production `.env` without exposing secrets.
-- [ ] Install approved site files.
-- [ ] Install/enable the base systemd service.
-- [ ] Run `deploy-production.sh` successfully.
-- [ ] Install/verify log retention.
-- [ ] Initialize site nodes with `s3-gateway-dbup`.
-- [ ] Detect the Zigbee USB gateway.
-- [ ] Validate MQTT and gateway operation.
-- [ ] Perform a controlled reboot and confirm automatic recovery.
-- [ ] Hand the unit to the Project Team with the operator workspace ready.
+Do not hand over secrets in an unsecured document.
 
 ---
 
-## Deferred / future development
+## Acceptance checklist — Production Team
 
-Do not block handover on these items:
+- [ ] Raspberry Pi OS prepared.
+- [ ] Approved Git revision recorded.
+- [ ] Fresh-Pi bootstrap completed.
+- [ ] `s3gw` service account and serial access verified.
+- [ ] PostgreSQL initialized.
+- [ ] Production `.env` configured securely.
+- [ ] Site files installed.
+- [ ] Production deployment completed.
+- [ ] Log retention active.
+- [ ] Site DB loaded with `s3-gateway-dbup`.
+- [ ] Zigbee USB detected.
+- [ ] MQTT/GPSUP/runtime hardening validated.
+- [ ] Regression tests passed.
+- [ ] Controlled reboot passed.
+- [ ] `validate-handover.sh` returns PASS after reboot.
+- [ ] Operator workspace ready for Project Team.
+
+---
+
+## Deferred future work
+
+Do not block handover on:
 
 - simultaneous multi-USB/multi-channel operation;
-- dedicated multi-instance service template;
-- USB-specific hardware reset isolation;
-- new set-timetable/set-active-profile APIs;
-- application/source-code redesign.
+- multi-instance service templates;
+- USB-specific hardware-reset isolation;
+- new Set Timetable / Set Active Profile APIs;
+- application/source redesign.
