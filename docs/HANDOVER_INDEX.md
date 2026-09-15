@@ -1,85 +1,66 @@
 # S3 Zigbee Gateway — Handover Index
 
-## Handover scope
+This document defines **who owns what**, which SOP each team follows, and the acceptance gate for handing a gateway over to site operations.
 
-This handover separates gateway ownership into two operational roles.
+---
 
-| Team | Primary responsibility |
+## Ownership model
+
+```mermaid
+flowchart LR
+    DEV[IoT / Development] -->|approved source| PROD[Production Team]
+    PROD -->|validated gateway| PROJECT[Project Team]
+    PROJECT -->|operational issues / defects| DEV
+
+    PROD --> A[Build + provision]
+    PROJECT --> B[Operate + maintain site config]
+    DEV --> C[Code + protocol + integration changes]
+```
+
+| Team | Owns | Does not own |
+|---|---|---|
+| **Project Team** | Day-to-day operation, node inventory, approved PAN/channel changes, DBUP, logs, GPS files, first-line checks | Application deployment, source changes, DB schema changes |
+| **Production Team** | Raspberry Pi preparation, gateway app installation, service setup, PostgreSQL, runtime hardening, final production validation | Feature development or protocol redesign |
+| **IoT / Development** | Source code, defects, protocol/backend integration, architecture changes, future enhancements | Routine site operation |
+
+---
+
+## Documentation by role
+
+| Need | Document |
 |---|---|
-| Project Team | Operate an installed gateway and manage site configuration/node inventory. |
-| Production Team | Build, provision, validate and deliver a new/replacement gateway. |
-| IoT / Development | Application changes, defects, protocol/backend changes and future enhancements. |
+| Operate an installed gateway | [`HANDOVER_PROJECT_TEAM_OPERATIONS.md`](HANDOVER_PROJECT_TEAM_OPERATIONS.md) |
+| Build/provision a new gateway | [`HANDOVER_PRODUCTION_TEAM_BUILD.md`](HANDOVER_PRODUCTION_TEAM_BUILD.md) |
+| Understand application internals | [`TECHNICAL_ARCHITECTURE.md`](TECHNICAL_ARCHITECTURE.md) |
+| Check MQTT startup/logging | [`S3_Zigbee_Gateway_MQTT_Startup_and_Logging_SOP.md`](S3_Zigbee_Gateway_MQTT_Startup_and_Logging_SOP.md) |
+| Repository overview | [`../README.md`](../README.md) |
 
-## Project Team document
+---
 
-Use:
+## Handover flow
 
-```text
-docs/HANDOVER_PROJECT_TEAM_OPERATIONS.md
+```mermaid
+flowchart TD
+    A[Approved source revision] --> B[Production Team builds gateway]
+    B --> C[Configure site files + secrets]
+    C --> D[Deploy + harden runtime]
+    D --> E[Load site nodes with DBUP]
+    E --> F[Run validate-handover.sh]
+    F -->|PASS| G[Controlled reboot]
+    G --> H[Run validation again]
+    H -->|PASS| I[Hand to Project Team]
 ```
 
-Project Team responsibilities:
+---
 
-- check/start/stop/restart the gateway;
-- manage the complete site node list;
-- manage approved PAN/channel configuration;
-- apply changes using `sudo s3-gateway-dbup`;
-- inspect gateway/MQTT/error logs;
-- retrieve GPS KML output;
-- perform basic service, USB and connectivity checks;
-- escalate software defects or protected-runtime issues.
+## Acceptance command
 
-Normal operator workspace:
-
-```text
-/home/pi/S3Gateway/
-```
-
-## Production Team document
-
-Use:
-
-```text
-docs/HANDOVER_PRODUCTION_TEAM_BUILD.md
-```
-
-Production Team responsibilities:
-
-- install approved Raspberry Pi OS;
-- install required packages and PostgreSQL;
-- prepare the `s3gw` service account;
-- obtain the approved source revision;
-- create the production Python environment;
-- prepare `/opt/s3-gateway/app`;
-- configure `.env` and approved site files;
-- install/enable the gateway service;
-- run the approved production deployment path;
-- install log retention and runtime hardening;
-- initialize the site DB using the supported DBUP path;
-- validate USB, MQTT, GPSUP and reboot recovery;
-- deliver the completed unit to the Project Team.
-
-## Handover validation
-
-Run the read-only validation script on the completed production gateway:
+Run on the completed production gateway:
 
 ```bash
 cd ~/gateway-test/s3-zigbee-gateway
 sudo bash scripts/validate-handover.sh
 ```
-
-The script checks:
-
-- service enabled/active;
-- `s3gw` + `GPSUP` process state;
-- operator workspace;
-- GPS path/write access;
-- runtime file protection;
-- restricted hardware-reset sudo permission;
-- PostgreSQL connectivity/tables/node count;
-- log-maintenance timer;
-- CP210x/ttyUSB detection;
-- recent MQTT connection evidence.
 
 Acceptance target:
 
@@ -87,57 +68,96 @@ Acceptance target:
 HANDOVER RESULT: PASS
 ```
 
-`PASS WITH WARNINGS` may be reviewed and accepted only when the warning is understood and documented. Any `FAIL` must be resolved before handover.
+The validation checks:
 
-## Project Team acceptance checklist
+- gateway service enabled and active;
+- `s3gw` runtime with `GPSUP`;
+- operator workspace and GPS/log write paths;
+- protected runtime permissions;
+- restricted hardware-reset sudo rule;
+- PostgreSQL connectivity, schema and node population;
+- log-maintenance timer;
+- CP210x / `/dev/ttyUSB*` detection;
+- recent MQTT connection evidence.
 
-- [ ] Can check gateway service status.
-- [ ] Can restart the gateway and verify recovery.
-- [ ] Can identify the active `GPSUP` process.
-- [ ] Can edit the approved operator node list.
-- [ ] Can identify/edit approved PAN/channel configuration.
-- [ ] Can run `sudo s3-gateway-dbup` safely.
-- [ ] Can verify node counts after DBUP.
-- [ ] Can inspect gateway, MQTT and error logs.
-- [ ] Can retrieve GPS KML files.
-- [ ] Understands protected paths and escalation criteria.
+`PASS WITH WARNINGS` requires an explicit documented review. Any `FAIL` blocks handover.
 
-## Production Team acceptance checklist
+---
 
-- [ ] Can prepare a gateway from approved Raspberry Pi OS.
-- [ ] Can install required system packages.
-- [ ] Can prepare PostgreSQL and the `s3gw` service account.
-- [ ] Can obtain and record the approved Git revision.
-- [ ] Can create the production `.venv`.
-- [ ] Can configure production `.env` securely.
-- [ ] Can install site configuration and node inventory.
-- [ ] Can install/enable the gateway systemd service.
-- [ ] Can execute `deploy-production.sh` successfully.
-- [ ] Can install/verify log retention.
-- [ ] Can initialize the site DB using `s3-gateway-dbup`.
-- [ ] Can detect the Zigbee USB gateway.
-- [ ] Can validate MQTT/GPSUP/runtime hardening.
-- [ ] Can perform a controlled reboot and verify automatic recovery.
-- [ ] Can deliver the operator workspace to the Project Team.
+## Project Team acceptance
+
+Project Team must be able to demonstrate:
+
+- [ ] Check service status.
+- [ ] Restart the gateway and verify recovery.
+- [ ] Confirm `pygw_main.py GPSUP` is running.
+- [ ] Edit the approved site node inventory.
+- [ ] Identify/edit approved PAN/channel values.
+- [ ] Run `sudo s3-gateway-dbup` safely.
+- [ ] Verify node counts after DBUP.
+- [ ] Read gateway, MQTT and error logs.
+- [ ] Retrieve GPS KML files.
+- [ ] Identify when an issue must be escalated.
+
+---
+
+## Production Team acceptance
+
+Production Team must be able to demonstrate:
+
+- [ ] Prepare a gateway from approved Raspberry Pi OS.
+- [ ] Obtain and record the approved Git revision.
+- [ ] Run the blank-Pi bootstrap path.
+- [ ] Configure production `.env` and site files securely.
+- [ ] Deploy the application and runtime hardening.
+- [ ] Install/verify PostgreSQL, service account and systemd service.
+- [ ] Install/verify log maintenance.
+- [ ] Load site nodes using `s3-gateway-dbup`.
+- [ ] Detect the Zigbee USB gateway.
+- [ ] Validate MQTT, GPSUP and runtime protections.
+- [ ] Reboot and confirm automatic recovery.
+- [ ] Deliver `/home/pi/S3Gateway/` ready for Project Team operation.
+
+---
+
+## Protected boundaries
+
+### Project Team working area
+
+```text
+/home/pi/S3Gateway/
+```
+
+### Protected production runtime
+
+```text
+/opt/s3-gateway/app/
+```
+
+Normal Project Team work must not directly modify the protected runtime.
+
+---
 
 ## Frozen future work
 
-The following are deliberately deferred and must not block the current handover:
+The following are deliberately deferred and do **not** block the current handover:
 
 - simultaneous two-USB/two-channel operation;
 - multi-instance gateway service architecture;
 - USB-specific hardware-reset isolation for multi-channel operation;
-- new set-timetable/set-active-profile APIs;
+- new Set Timetable / Set Active Profile APIs;
 - new MQTT command/control behavior;
 - database schema redesign;
 - Zigbee protocol/firmware redesign.
 
-## Source baseline
+---
 
-The handover implementation was created from the proven production baseline:
+## Release-control rule
+
+The handover work was developed from:
 
 ```text
 feature/daily-log-retention
 ```
 
-Production must always use the approved branch/tag/commit supplied for the actual build; do not assume the branch name alone is sufficient release control.
+Production builds must use an **approved commit/tag/release revision**. Do not use a branch name alone as final release identification.
