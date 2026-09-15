@@ -345,7 +345,7 @@ The unit is not ready for delivery unless automatic recovery passes after reboot
   -m unittest tests.test_handover_assets -v
 ```
 
-Expected validated reference:
+Validated reference:
 
 ```text
 Ran 7 tests
@@ -359,14 +359,14 @@ OK
   -m unittest discover -s tests -v
 ```
 
-Current validated reference:
+Validated reference:
 
 ```text
 Ran 48 tests
 OK
 ```
 
-The MQTT failure-isolation test intentionally emits a mocked `RuntimeError: mqtt unavailable`; the test is successful when it still ends in `ok` and the suite finishes `OK`. fileciteturn146file0L48-L124
+The MQTT failure-isolation test intentionally emits a mocked `RuntimeError: mqtt unavailable`; the test is successful when it still ends in `ok` and the suite finishes `OK`.
 
 ---
 
