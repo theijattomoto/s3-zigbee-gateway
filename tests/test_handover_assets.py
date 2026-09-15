@@ -48,11 +48,27 @@ class HandoverAssetsTests(unittest.TestCase):
 
     def test_handover_docs_exist(self):
         for path in (
+            'README.md',
+            'docs/README.md',
             'docs/HANDOVER_INDEX.md',
             'docs/HANDOVER_PROJECT_TEAM_OPERATIONS.md',
             'docs/HANDOVER_PRODUCTION_TEAM_BUILD.md',
+            'docs/TECHNICAL_ARCHITECTURE.md',
         ):
             self.assertTrue((ROOT / path).is_file(), path)
+
+    def test_documentation_has_no_chat_only_citation_tokens(self):
+        docs = [ROOT / 'README.md', *sorted((ROOT / 'docs').glob('*.md'))]
+        for path in docs:
+            text = path.read_text(encoding='utf-8')
+            self.assertNotIn('filecite', text, path)
+            self.assertNotIn('turn146file0', text, path)
+
+    def test_readme_links_to_role_based_handover_docs(self):
+        text = (ROOT / 'README.md').read_text(encoding='utf-8')
+        self.assertIn('docs/HANDOVER_PROJECT_TEAM_OPERATIONS.md', text)
+        self.assertIn('docs/HANDOVER_PRODUCTION_TEAM_BUILD.md', text)
+        self.assertIn('docs/TECHNICAL_ARCHITECTURE.md', text)
 
 
 if __name__ == '__main__':
