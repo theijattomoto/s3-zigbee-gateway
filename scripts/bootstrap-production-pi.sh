@@ -3,12 +3,20 @@ set -euo pipefail
 
 SERVICE_NAME="${SERVICE_NAME:-s3-zigbee-gateway}"
 TARGET_DIR="${TARGET_DIR:-/opt/s3-gateway/app}"
-OPERATOR_DIR="${S3_OPERATOR_DIR:-/home/pi/S3Gateway}"
 DB_NAME="${DB_NAME:-serial-gateway-program}"
 SERVICE_USER="${SERVICE_USER:-s3gw}"
 SERVICE_GROUP="${SERVICE_GROUP:-s3gw}"
 SOURCE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BASE_UNIT="$SOURCE_DIR/deploy/systemd/s3-zigbee-gateway.service"
+
+# Use an explicitly supplied operator account when provided. Otherwise use the
+# non-root account that invoked sudo (works for both Raspberry Pi 'pi' and
+# Rock 3C 'radxa' style installations). Fall back to 'pi' only when no sudo
+# caller is available.
+OPERATOR_USER="${S3_OPERATOR_USER:-${SUDO_USER:-pi}}"
+if [ "$OPERATOR_USER" = "root" ]; then
+    OPERATOR_USER="${S3_OPERATOR_USER:-pi}"
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run with sudo/root." >&2
@@ -16,7 +24,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 if ! command -v apt-get >/dev/null 2>&1; then
-    echo "This bootstrap currently supports Raspberry Pi OS/Debian systems with apt-get." >&2
+    echo "This bootstrap supports Debian-family gateway hosts with apt-get." >&2
     exit 1
 fi
 
@@ -25,16 +33,51 @@ if [ ! -f "$SOURCE_DIR/requirements.txt" ] || [ ! -f "$BASE_UNIT" ]; then
     exit 1
 fi
 
+if ! id "$OPERATOR_USER" >/dev/null 2>&1; then
+    echo "Operator account does not exist: $OPERATOR_USER" >&2
+    echo "Set S3_OPERATOR_USER=<existing-user> when invoking the bootstrap if required." >&2
+    exit 1
+fi
+
+OPERATOR_GROUP="$(id -gn "$OPERATOR_USER")"
+OPERATOR_HOME="$(getent passwd "$OPERATOR_USER" | cut -d: -f6)"
+if [ -z "$OPERATOR_HOME" ] || [ ! -d "$OPERATOR_HOME" ]; then
+    echo "Operator home directory is unavailable for $OPERATOR_USER: $OPERATOR_HOME" >&2
+    exit 1
+fi
+OPERATOR_DIR="${S3_OPERATOR_DIR:-$OPERATOR_HOME/S3Gateway}"
+
 if [ -d "$TARGET_DIR" ] && [ -n "$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
     echo "Refusing fresh bootstrap because target is not empty: $TARGET_DIR" >&2
     echo "Use deploy-production.sh for an existing gateway." >&2
     exit 1
 fi
 
+# Do not attempt to repair a damaged OS package database automatically. A
+# production bootstrap must stop before modifying application/runtime state so
+# the underlying host can be repaired or re-imaged deliberately.
+echo "Checking Debian package-manager health..."
+if command -v dpkg >/dev/null 2>&1; then
+    DPKG_AUDIT_OUTPUT="$(dpkg --audit 2>&1 || true)"
+    if ! dpkg-query -W -f='${Status}\n' base-files >/dev/null 2>&1; then
+        echo "ERROR: dpkg package database is not readable." >&2
+        echo "Repair or re-image the gateway OS before rerunning this bootstrap." >&2
+        exit 1
+    fi
+    if printf '%s\n' "$DPKG_AUDIT_OUTPUT" | grep -Eqi 'unpacked but not yet configured|half-installed|reinstreq|serious problems'; then
+        echo "ERROR: dpkg reports an incomplete/broken package state:" >&2
+        printf '%s\n' "$DPKG_AUDIT_OUTPUT" >&2
+        echo "Run OS package recovery before rerunning this bootstrap." >&2
+        exit 1
+    fi
+fi
+
+echo "Gateway host operator: $OPERATOR_USER"
+echo "Operator workspace   : $OPERATOR_DIR"
 echo "Installing required OS packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y \
+if ! apt-get install -y \
     git \
     python3 \
     python3-venv \
@@ -45,6 +88,13 @@ apt-get install -y \
     acl \
     sudo \
     usbutils
+then
+    echo >&2
+    echo "ERROR: OS package installation failed." >&2
+    echo "The gateway runtime has not been provisioned." >&2
+    echo "Repair apt/dpkg (or re-image the host) and rerun this bootstrap." >&2
+    exit 1
+fi
 
 for cmd in install rsync setfacl psql runuser systemctl python3; do
     command -v "$cmd" >/dev/null 2>&1 || {
@@ -136,20 +186,18 @@ if [ ! -f "$TARGET_DIR/.env" ]; then
     cp "$TARGET_DIR/.env.example" "$TARGET_DIR/.env"
 fi
 sed -i "s/^DB_USER=.*/DB_USER=${SERVICE_USER}/" "$TARGET_DIR/.env"
+sed -i "s|^MQTT_LOG_FILE=.*|MQTT_LOG_FILE=$OPERATOR_DIR/log/mqtt.log|" "$TARGET_DIR/.env"
+sed -i "s|^GATEWAY_LOG_DIR=.*|GATEWAY_LOG_DIR=$OPERATOR_DIR/log|" "$TARGET_DIR/.env"
+sed -i "s|^GATEWAY_ERROR_LOG_DIR=.*|GATEWAY_ERROR_LOG_DIR=$OPERATOR_DIR/log|" "$TARGET_DIR/.env"
 chown root:"$SERVICE_GROUP" "$TARGET_DIR/.env"
 chmod 640 "$TARGET_DIR/.env"
 
-if ! id pi >/dev/null 2>&1; then
-    echo "Required operator account 'pi' does not exist. Create the approved operator account before continuing." >&2
-    exit 1
-fi
-
-install -d -o pi -g pi -m 755 "$OPERATOR_DIR"
+install -d -o "$OPERATOR_USER" -g "$OPERATOR_GROUP" -m 755 "$OPERATOR_DIR"
 if [ ! -f "$OPERATOR_DIR/samplelist.csv" ]; then
-    install -o pi -g pi -m 644 "$TARGET_DIR/PYSerialGateway/samplelist.csv" "$OPERATOR_DIR/samplelist.csv"
+    install -o "$OPERATOR_USER" -g "$OPERATOR_GROUP" -m 644 "$TARGET_DIR/PYSerialGateway/samplelist.csv" "$OPERATOR_DIR/samplelist.csv"
 fi
 if [ ! -f "$OPERATOR_DIR/pygw_conf.py" ]; then
-    install -o pi -g pi -m 644 "$TARGET_DIR/PYSerialGateway/pygw_conf.py" "$OPERATOR_DIR/pygw_conf.py"
+    install -o "$OPERATOR_USER" -g "$OPERATOR_GROUP" -m 644 "$TARGET_DIR/PYSerialGateway/pygw_conf.py" "$OPERATOR_DIR/pygw_conf.py"
 fi
 
 install -o root -g root -m 644 "$BASE_UNIT" "/etc/systemd/system/${SERVICE_NAME}.service"
@@ -157,7 +205,10 @@ systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
 
 cat <<EOF
-Fresh-Pi bootstrap preparation complete.
+Fresh gateway bootstrap preparation complete.
+
+Operator account : $OPERATOR_USER
+Operator workspace: $OPERATOR_DIR
 
 NEXT REQUIRED STEPS:
 1. Edit production secrets/settings:
