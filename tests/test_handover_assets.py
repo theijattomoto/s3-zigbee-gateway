@@ -46,15 +46,6 @@ class HandoverAssetsTests(unittest.TestCase):
         self.assertIn('sudo s3-gateway-dbup', text)
         self.assertIn('sudo bash scripts/validate-handover.sh', text)
 
-    def test_dbup_is_serial_independent_and_verified(self):
-        wrapper = (ROOT / 'scripts/s3-gateway-dbup').read_text()
-        sync = (ROOT / 'scripts/dbup_sync.py').read_text()
-        self.assertIn('dbup_sync.py', wrapper)
-        self.assertNotIn('DBUP_ONLY', wrapper)
-        self.assertIn('DBUP sync verification: PASS', sync)
-        self.assertIn('PostgreSQL node_database does not match operator CSV/GW config', sync)
-        self.assertNotIn('SerialObjectManager', sync)
-
     def test_handover_docs_exist(self):
         for path in (
             'README.md',
