@@ -2,23 +2,34 @@
 
 set -euo pipefail
 
-SERVICE_NAME="s3-zigbee-gateway"
-OPERATOR_DIR="${S3_OPERATOR_DIR:-/home/pi/S3Gateway}"
-APP_DIR="/opt/s3-gateway/app/PYSerialGateway"
+SERVICE_NAME="${SERVICE_NAME:-s3-zigbee-gateway}"
+OPERATOR_CONFIG="${S3_OPERATOR_CONFIG:-/etc/s3-gateway/operator.conf}"
+if [ -f "$OPERATOR_CONFIG" ]; then
+    # shellcheck disable=SC1090
+    . "$OPERATOR_CONFIG"
+fi
+OPERATOR_USER="${S3_OPERATOR_USER:-${SUDO_USER:-pi}}"
+if [ "$OPERATOR_USER" = "root" ]; then OPERATOR_USER="pi"; fi
+OPERATOR_HOME="${S3_OPERATOR_HOME:-$(getent passwd "$OPERATOR_USER" | cut -d: -f6)}"
+OPERATOR_DIR="${S3_OPERATOR_DIR:-$OPERATOR_HOME/S3Gateway}"
+APP_DIR="${APP_DIR:-/opt/s3-gateway/app/PYSerialGateway}"
 RUNNER="$APP_DIR/run-service.sh"
 CSV_SOURCE="$OPERATOR_DIR/samplelist.csv"
 CONF_SOURCE="$OPERATOR_DIR/pygw_conf.py"
 CSV_TARGET="$APP_DIR/samplelist.csv"
 CONF_TARGET="$APP_DIR/pygw_conf.py"
-BACKUP_DIR="/home/pi/s3-gateway-backups"
+BACKUP_DIR="${S3_BACKUP_DIR:-$OPERATOR_HOME/s3-gateway-backups}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
-DB_NAME="serial-gateway-program"
+DB_NAME="${DB_NAME:-serial-gateway-program}"
 SERVICE_STOPPED=0
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run this command with sudo/root." >&2
     exit 1
 fi
+
+id "$OPERATOR_USER" >/dev/null 2>&1 || { echo "ERROR: operator account missing: $OPERATOR_USER" >&2; exit 1; }
+[ -n "$OPERATOR_HOME" ] && [ -d "$OPERATOR_HOME" ] || { echo "ERROR: operator home unavailable: $OPERATOR_HOME" >&2; exit 1; }
 
 restart_on_exit() {
     exit_code=$?
@@ -31,6 +42,7 @@ restart_on_exit() {
 trap restart_on_exit EXIT
 
 echo "=== S3 Gateway DBUP ==="
+echo "Operator workspace: $OPERATOR_DIR"
 
 if [ ! -f "$CSV_SOURCE" ]; then
     echo "ERROR: operator node list not found: $CSV_SOURCE" >&2
@@ -47,7 +59,6 @@ if [ ! -x "$RUNNER" ]; then
     exit 1
 fi
 
-# Validate CSV structure and values without modifying production.
 python3 - "$CSV_SOURCE" <<'PY'
 import csv
 import re
@@ -98,7 +109,6 @@ print('CSV validation: PASS')
 print(f'Target nodes in CSV: {len(rows)}')
 PY
 
-# Validate operator gateway configuration as Python and verify the two gateway tuples.
 python3 - "$CONF_SOURCE" <<'PY'
 import ast
 import sys
@@ -130,11 +140,12 @@ for name in ('first_GW_data', 'second_GW_data'):
 print('Gateway config validation: PASS')
 PY
 
-mkdir -p "$BACKUP_DIR"
+install -d -o "$OPERATOR_USER" -g "$(id -gn "$OPERATOR_USER")" -m 750 "$BACKUP_DIR"
 
 echo "Backing up PostgreSQL..."
 DB_BACKUP="$BACKUP_DIR/serial-gateway-before-dbup-$TIMESTAMP.sql"
 runuser -u s3gw -- pg_dump -d "$DB_NAME" > "$DB_BACKUP"
+chown "$OPERATOR_USER":"$(id -gn "$OPERATOR_USER")" "$DB_BACKUP"
 echo "Backup created:"
 echo "  $DB_BACKUP"
 

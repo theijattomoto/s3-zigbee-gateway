@@ -1,0 +1,20 @@
+[Unit]
+Description=S3 Zigbee Gateway
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=s3gw
+Group=s3gw
+SupplementaryGroups=dialout
+WorkingDirectory=/opt/s3-gateway/app/PYSerialGateway
+EnvironmentFile=/opt/s3-gateway/app/.env
+ExecStart=/opt/s3-gateway/app/PYSerialGateway/run-service.sh
+Restart=on-failure
+RestartSec=5
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
