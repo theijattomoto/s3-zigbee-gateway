@@ -12,9 +12,8 @@ OPERATOR_USER="${S3_OPERATOR_USER:-${SUDO_USER:-pi}}"
 if [ "$OPERATOR_USER" = "root" ]; then OPERATOR_USER="pi"; fi
 OPERATOR_HOME="${S3_OPERATOR_HOME:-$(getent passwd "$OPERATOR_USER" | cut -d: -f6)}"
 OPERATOR_DIR="${S3_OPERATOR_DIR:-$OPERATOR_HOME/S3Gateway}"
-APP_ROOT="${APP_ROOT:-/opt/s3-gateway/app}"
-APP_DIR="$APP_ROOT/PYSerialGateway"
-SYNC_SCRIPT="$APP_ROOT/scripts/dbup_sync.py"
+APP_DIR="${APP_DIR:-/opt/s3-gateway/app/PYSerialGateway}"
+RUNNER="$APP_DIR/run-service.sh"
 CSV_SOURCE="$OPERATOR_DIR/samplelist.csv"
 CONF_SOURCE="$OPERATOR_DIR/pygw_conf.py"
 CSV_TARGET="$APP_DIR/samplelist.csv"
@@ -31,8 +30,6 @@ fi
 
 id "$OPERATOR_USER" >/dev/null 2>&1 || { echo "ERROR: operator account missing: $OPERATOR_USER" >&2; exit 1; }
 [ -n "$OPERATOR_HOME" ] && [ -d "$OPERATOR_HOME" ] || { echo "ERROR: operator home unavailable: $OPERATOR_HOME" >&2; exit 1; }
-[ -x "$APP_ROOT/.venv/bin/python" ] || { echo "ERROR: production Python environment missing: $APP_ROOT/.venv" >&2; exit 1; }
-[ -f "$SYNC_SCRIPT" ] || { echo "ERROR: DBUP synchronizer missing: $SYNC_SCRIPT" >&2; exit 1; }
 
 restart_on_exit() {
     exit_code=$?
@@ -54,6 +51,11 @@ fi
 
 if [ ! -f "$CONF_SOURCE" ]; then
     echo "ERROR: operator gateway config not found: $CONF_SOURCE" >&2
+    exit 1
+fi
+
+if [ ! -x "$RUNNER" ]; then
+    echo "ERROR: production gateway runner not found: $RUNNER" >&2
     exit 1
 fi
 
@@ -86,13 +88,16 @@ with open(path, newline='', encoding='utf-8-sig') as fh:
             raise SystemExit(f"ERROR: node ID must be 4 hex characters at line {line_no}: {values['node']}")
         try:
             pan = int(values['pan_id'], 16)
+        except ValueError:
+            raise SystemExit(f"ERROR: invalid PAN ID at line {line_no}: {values['pan_id']}")
+        try:
             channel = int(values['channel'])
         except ValueError:
-            raise SystemExit(f'ERROR: invalid PAN/channel at line {line_no}')
-        if not (0 <= pan <= 0xFFFF):
-            raise SystemExit(f"ERROR: PAN ID out of range at line {line_no}: {values['pan_id']}")
+            raise SystemExit(f"ERROR: invalid Zigbee channel at line {line_no}: {values['channel']}")
         if not (11 <= channel <= 26):
             raise SystemExit(f"ERROR: Zigbee channel must be 11-26 at line {line_no}: {channel}")
+        if not (0 <= pan <= 0xFFFF):
+            raise SystemExit(f"ERROR: PAN ID out of range at line {line_no}: {values['pan_id']}")
         seen_nodes.add(values['node'])
         seen_poles.add(values['pole_node'])
         rows.append(values)
@@ -157,13 +162,11 @@ systemctl stop "$SERVICE_NAME"
 SERVICE_STOPPED=1
 
 echo
-echo "Running serial-independent database synchronization..."
-if runuser -u s3gw -- env \
-    DB_USER=s3gw \
-    MQTT_ENABLED=false \
-    GATEWAY_LOG_DIR="$OPERATOR_DIR/log" \
-    GATEWAY_ERROR_LOG_DIR="$OPERATOR_DIR/log" \
-    "$APP_ROOT/.venv/bin/python" "$SYNC_SCRIPT"
+echo "Running database synchronization..."
+cd "$APP_DIR"
+
+if runuser -u s3gw -- env DB_USER=s3gw MQTT_ENABLED=false \
+    "$RUNNER" DBUP_ONLY
 then
     echo
     echo "DBUP: PASS"
