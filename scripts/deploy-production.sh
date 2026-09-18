@@ -33,6 +33,7 @@ RSYNC_EXCLUDES=(
     "--exclude=PYSerialGateway/GPSlog/"
     "--exclude=mqtt_buffer.db"
     "--exclude=*.mqtt.db"
+    "--exclude=location_report_state.db"
 )
 
 if [ "$(id -u)" -ne 0 ]; then
