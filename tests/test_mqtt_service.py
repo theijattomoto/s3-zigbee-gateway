@@ -20,6 +20,15 @@ from pyserialgateway.mqtt_service.topics import MQTTTopics
 class FakeResult:
     rc = 0
 
+    def __init__(self):
+        self.waited = False
+
+    def wait_for_publish(self, timeout=None):
+        self.waited = True
+
+    def is_published(self):
+        return self.waited
+
 
 class FakeClient:
     def __init__(self):
@@ -244,6 +253,37 @@ class MQTTServiceTests(unittest.TestCase):
         time.sleep(1.2)
         service.stopping.set()
         worker.join(timeout=1)
+        self.assertEqual(client.published, [])
+
+    def test_confirmed_json_publish_waits_for_qos1_ack(self):
+        service, client = self.make_service()
+        service.connected.set()
+
+        ok = service.publish_json_confirmed(
+            "s3/zigbee/gw-01/gps/001A",
+            {"node_id": "001A", "latitude": 3.1, "longitude": 101.7},
+            qos=1,
+            retain=True,
+        )
+
+        self.assertTrue(ok)
+        topic, raw, qos, retain = client.published[-1]
+        self.assertEqual(topic, "s3/zigbee/gw-01/gps/001A")
+        self.assertEqual(json.loads(raw)["node_id"], "001A")
+        self.assertEqual(qos, 1)
+        self.assertTrue(retain)
+
+    def test_confirmed_json_publish_refuses_while_disconnected(self):
+        service, client = self.make_service()
+
+        ok = service.publish_json_confirmed(
+            "s3/zigbee/gw-01/gps/001A",
+            {"node_id": "001A"},
+            qos=1,
+            retain=True,
+        )
+
+        self.assertFalse(ok)
         self.assertEqual(client.published, [])
 
     def test_command_callback_is_transport_agnostic(self):
