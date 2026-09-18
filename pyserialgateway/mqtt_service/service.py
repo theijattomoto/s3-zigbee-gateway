@@ -233,6 +233,58 @@ class MQTTService:
             live_only,
         )
 
+    def publish_json_confirmed(
+        self,
+        topic: str,
+        payload: dict,
+        qos: int = 1,
+        retain: bool = False,
+        timeout: float = 5.0,
+    ) -> bool:
+        """Synchronously publish JSON and wait for broker acknowledgement.
+
+        This method is intended for low-rate durable state such as one-time
+        node location reporting. It must not be used from the serial packet
+        processing path.
+        """
+        if not self.connected.is_set():
+            return False
+
+        encoded = json.dumps(payload, separators=(",", ":"), default=str)
+        try:
+            result = self.client.publish(topic, encoded, qos=qos, retain=retain)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                _LOG.warning(
+                    "MQTT confirmed publish returned rc=%s topic=%s",
+                    result.rc,
+                    topic,
+                )
+                return False
+
+            waiter = getattr(result, "wait_for_publish", None)
+            if callable(waiter):
+                waiter(timeout=timeout)
+
+            is_published = getattr(result, "is_published", None)
+            if callable(is_published) and not is_published():
+                _LOG.warning(
+                    "MQTT confirmed publish timed out topic=%s timeout=%ss",
+                    topic,
+                    timeout,
+                )
+                return False
+
+            _LOG.info(
+                "MQTT confirmed publish complete topic=%s qos=%s retain=%s",
+                topic,
+                qos,
+                retain,
+            )
+            return True
+        except Exception as exc:
+            _LOG.warning("MQTT confirmed publish failed topic=%s: %s", topic, exc)
+            return False
+
     def publish_command_result(self, request_id: str, payload: dict) -> None:
         self.publish_json(self.topics.command_result(request_id), payload, qos=1)
 
