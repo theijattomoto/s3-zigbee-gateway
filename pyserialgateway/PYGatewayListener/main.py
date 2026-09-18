@@ -33,6 +33,7 @@ from .reset_thread import MainResetThread
 from .polling_thread import MainPollingThread
 from .main_listener_thread import MainListenerThread
 from ..mqtt_service.mirroring import start_mqtt_mirroring, stop_mqtt_mirroring
+from .location_reporter import create_location_reporter
 
 def main(*args):
     '''
@@ -125,8 +126,16 @@ def main(*args):
     # MQTT is an independent gateway transport. Start it before probing Zigbee
     # serial so broker status/reconnect remains alive while hardware is absent.
     mqtt_started = start_mqtt_mirroring()
+    location_reporter = None
     if mqtt_started:
         my_logger.info('MQTT transport started independently of Zigbee serial.')
+        try:
+            location_reporter = create_location_reporter()
+            location_reporter.start()
+            my_logger.info('Automatic S3 node location reporter started.')
+        except Exception as error:
+            location_reporter = None
+            my_logger_problem.error('Failed to start S3 location reporter: %s', error)
     else:
         my_logger.warning('MQTT transport is disabled or failed to start.')
     
@@ -212,6 +221,9 @@ def main(*args):
                 )
         except KeyboardInterrupt:
             my_logger.info('Gateway shutdown requested while waiting for Zigbee serial.')
+            if location_reporter is not None:
+                location_reporter.stop()
+                location_reporter.join(timeout=5)
             if mqtt_started:
                 stop_mqtt_mirroring()
             return
@@ -226,6 +238,9 @@ def main(*args):
 
     if options_status_dict['DBUP_ONLY']:
         my_logger.info('DBUP_ONLY completed. Database synchronized; exiting before gateway runtime starts.')
+        if location_reporter is not None:
+            location_reporter.stop()
+            location_reporter.join(timeout=5)
         if mqtt_started:
             stop_mqtt_mirroring()
         return
@@ -617,6 +632,9 @@ def main(*args):
         for threads in listener_threads:
             threads.stop()
             threads.join()
+        if location_reporter is not None:
+            location_reporter.stop()
+            location_reporter.join(timeout=5)
         if mqtt_started:
             stop_mqtt_mirroring()
         my_logger.debug('All threading processes stopped.')
