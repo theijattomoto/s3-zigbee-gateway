@@ -91,6 +91,25 @@ def stop_mqtt_mirroring() -> None:
         _LOG.exception("MQTT mirroring failed to stop cleanly")
 
 
+def publish_confirmed_location(node_id: str, payload: dict) -> bool:
+    """Publish one retained QoS 1 node location and wait for broker acknowledgement."""
+    adapter = _get_adapter()
+    if adapter is None:
+        return False
+
+    try:
+        topic = adapter.service.topics.gps(str(node_id))
+        return adapter.service.publish_json_confirmed(
+            topic,
+            payload,
+            qos=1,
+            retain=True,
+        )
+    except Exception:
+        _LOG.exception("MQTT location publish failed node_id=%s", node_id)
+        return False
+
+
 def mirror_validated_packet(
     node_id: str,
     node_data: Any,
