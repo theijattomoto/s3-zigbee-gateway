@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import threading
+from collections import Counter
 from contextlib import closing
 from typing import Callable, Iterable, Optional
 
@@ -57,7 +58,20 @@ def _valid_coordinate(latitude, longitude, description=None) -> bool:
     ) < 1e-9:
         return False
 
-    if str(description or "").strip() == "#G0!":
+    if str(description or "").strip() != "#G0":
+        return False
+
+    return True
+
+
+def _eligible_inventory_row(row: dict) -> bool:
+    pole_node = str(row.get("pole_node") or "").strip().upper()
+
+    if not pole_node:
+        return False
+    if pole_node == "TBD-AUTO":
+        return False
+    if pole_node.startswith("GW-"):
         return False
 
     return True
@@ -182,9 +196,25 @@ class S3LocationReporter(threading.Thread):
         reported = 0
         rows = list(self.fetch_rows() or [])
 
+        node_counts = Counter(
+            str(row.get("node_id") or "").strip().upper()
+            for row in rows
+        )
+
         for row in rows:
             node_id = str(row.get("node_id") or "").strip().upper()
             if not _NODE_RE.fullmatch(node_id):
+                continue
+            if node_counts[node_id] != 1:
+                _LOG.warning(
+                    "Skipping duplicate S3 node identity "
+                    "gateway_id=%s node_id=%s rows=%s",
+                    self.gateway_id,
+                    node_id,
+                    node_counts[node_id],
+                )
+                continue
+            if not _eligible_inventory_row(row):
                 continue
             if self._already_reported(node_id):
                 continue

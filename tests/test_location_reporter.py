@@ -4,6 +4,7 @@ import unittest
 
 from pyserialgateway.PYGatewayListener.location_reporter import (
     S3LocationReporter,
+    _eligible_inventory_row,
     _valid_coordinate,
 )
 
@@ -20,7 +21,47 @@ class LocationReporterTests(unittest.TestCase):
         self.assertFalse(_valid_coordinate("3.069900", "101.692244", "#G0"))
         self.assertFalse(_valid_coordinate("0", "0", "#G0"))
         self.assertFalse(_valid_coordinate("invalid", "101.7", "#G0"))
+        self.assertFalse(_valid_coordinate("3.123456", "101.654321", "#G0-"))
         self.assertTrue(_valid_coordinate("3.123456", "101.654321", "#G0"))
+
+    def test_inventory_filter_rejects_non_lantern_rows(self):
+        self.assertFalse(_eligible_inventory_row({"pole_node": None}))
+        self.assertFalse(_eligible_inventory_row({"pole_node": ""}))
+        self.assertFalse(_eligible_inventory_row({"pole_node": "TBD-AUTO"}))
+        self.assertFalse(_eligible_inventory_row({"pole_node": "GW-1"}))
+        self.assertFalse(_eligible_inventory_row({"pole_node": "GW-2"}))
+        self.assertTrue(_eligible_inventory_row({"pole_node": "R-48"}))
+
+    def test_duplicate_node_identity_fails_closed(self):
+        rows = [
+            {
+                "node_id": "0148",
+                "pole_node": "R-1",
+                "latitude": "3.0675",
+                "longitude": "101.68768833333333",
+                "description": "#G0",
+            },
+            {
+                "node_id": "0148",
+                "pole_node": "R-1",
+                "latitude": "3.0675",
+                "longitude": "101.68768833333333",
+                "description": "#G0",
+            },
+        ]
+        published = []
+
+        reporter = S3LocationReporter(
+            gateway_id="s3-gw-01",
+            state_db=self.make_state_db(),
+            fetch_rows=lambda: rows,
+            publisher=lambda node_id, payload: published.append(
+                (node_id, payload)
+            ) or True,
+        )
+
+        self.assertEqual(reporter.report_once(), 0)
+        self.assertEqual(published, [])
 
     def test_reports_valid_location_once_and_persists_state(self):
         rows = [
